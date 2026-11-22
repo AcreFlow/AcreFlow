@@ -12,75 +12,98 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="icon-192.png">
-<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="vendor/maplibre-gl.css">
 <style>
-:root{--panel:rgba(18,22,20,.93);--ink:#eef2ea;--mute:#a7b2a4;--line:rgba(255,255,255,.12);--green:#a4c639;--rain:#4fb3ff;--warn:#ffb347}
+:root{--panel:rgba(18,22,20,.94);--ink:#eef2ea;--mute:#a7b2a4;--line:rgba(255,255,255,.12);--green:#a4c639;--rain:#4fb3ff;--warn:#ffb347;--tile:#ff8a1e;--top:calc(env(safe-area-inset-top) + 64px)}
 *{box-sizing:border-box;min-width:0}
-html,body{margin:0;height:100%;background:#0d100e;color:var(--ink);font:15px/1.4 Barlow,system-ui,sans-serif;overflow:hidden;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;position:fixed;inset:0;background:#0d100e;color:var(--ink);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;touch-action:manipulation;-webkit-text-size-adjust:100%}
 input[type=search],input[type=text],textarea{-webkit-user-select:text;user-select:text}
 #map{position:absolute;inset:0}
 #rain{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:2}
-button,input,textarea{font:inherit;color:inherit}
-.install{position:absolute;left:10px;right:10px;top:calc(env(safe-area-inset-top) + 62px);z-index:6;max-width:520px;margin:0 auto;background:var(--rain);color:#04223a;border-radius:12px;padding:10px 12px;display:flex;gap:10px;align-items:center;font-weight:500}
-.install button{background:none;border:0;font-weight:700;min-width:44px;min-height:44px;cursor:pointer}
+button,input,textarea,select{font:inherit;color:inherit}
+.install{position:absolute;left:10px;right:10px;top:var(--top);z-index:6;max-width:520px;margin:0 auto;background:var(--rain);color:#04223a;border-radius:12px;padding:6px 6px 6px 12px;display:flex;gap:8px;align-items:center;font-weight:500}
+.install button{background:none;border:0;font-weight:700;min-width:44px;min-height:44px;cursor:pointer;color:inherit}
 .top{position:absolute;left:0;right:0;top:0;padding:calc(env(safe-area-inset-top) + 10px) 10px 0;display:flex;gap:8px;z-index:5;pointer-events:none}
 .top>*{pointer-events:auto}
-.search{flex:1;display:flex;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;backdrop-filter:blur(6px)}
-.search input{flex:1;background:none;border:0;padding:0 12px;height:44px;font-size:16px;outline:none}
-.btn{height:44px;min-width:44px;padding:0 14px;border-radius:12px;border:1px solid var(--line);background:var(--panel);cursor:pointer;font-weight:600;backdrop-filter:blur(6px);white-space:nowrap}
-.btn:focus-visible,.search input:focus-visible{outline:2px solid var(--green);outline-offset:1px}
+.search{flex:1;display:flex;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.search input{flex:1;background:none;border:0;padding:0 12px;height:44px;font-size:16px;outline:none;-webkit-appearance:none;appearance:none}
+.btn{height:44px;min-width:44px;padding:0 14px;border-radius:12px;border:1px solid var(--line);background:var(--panel);cursor:pointer;font-weight:600;white-space:nowrap}
+.btn:focus-visible,.search input:focus-visible,select:focus-visible{outline:2px solid var(--green);outline-offset:1px}
 .btn.primary{background:var(--green);color:#132006;border-color:transparent}
-.btn.rainon{background:var(--rain);color:#04223a;border-color:transparent}
+.btn.on{background:var(--rain);color:#04223a;border-color:transparent}
 .btn:disabled{opacity:.45;cursor:default}
-.search .btn{border:0;border-radius:0;border-left:1px solid var(--line);backdrop-filter:none}
+.btn.sm{padding:0 12px}
+.search .btn{border:0;border-radius:0;border-left:1px solid var(--line)}
+
+/* map controls sit under the search bar; attribution stays folded */
+.maplibregl-ctrl-top-right,.maplibregl-ctrl-top-left{top:var(--top)}
+.maplibregl-ctrl-top-right .maplibregl-ctrl{margin:0 10px 8px 0}
+.maplibregl-ctrl-top-left .maplibregl-ctrl{margin:0 0 0 10px}
+.maplibregl-ctrl-group button{width:44px;height:44px}
+.maplibregl-ctrl-group:not(:empty){background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:none}
+.maplibregl-ctrl-group button .maplibregl-ctrl-icon{filter:invert(1)}
+.maplibregl-ctrl-attrib.maplibregl-compact{max-width:calc(100vw - 80px)}
 
 /* draggable bottom sheet */
-.sheet{position:absolute;left:0;right:0;bottom:0;z-index:5;padding:0 10px calc(env(safe-area-inset-bottom) + 10px);pointer-events:none}
-.card{pointer-events:auto;max-width:520px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:16px;backdrop-filter:blur(8px);display:flex;flex-direction:column;max-height:58vh;transition:transform .25s cubic-bezier(.2,.8,.2,1);will-change:transform}
+.sheet{position:absolute;left:0;right:0;bottom:0;z-index:5;padding:0 8px calc(env(safe-area-inset-bottom) + 8px);pointer-events:none}
+.card{pointer-events:auto;max-width:520px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:16px;display:flex;flex-direction:column;max-height:56vh;max-height:min(56dvh,560px);transition:transform .25s cubic-bezier(.2,.8,.2,1);will-change:transform}
 .card.dragging{transition:none}
-.grab{flex:none;height:26px;display:flex;align-items:center;justify-content:center;cursor:grab;touch-action:none}
+.grab{flex:none;height:22px;display:flex;align-items:center;justify-content:center;cursor:grab;touch-action:none}
 .grab::before{content:"";width:44px;height:5px;border-radius:3px;background:rgba(255,255,255,.35)}
-.body{overflow-y:auto;padding:0 12px 12px;-webkit-overflow-scrolling:touch}
-.head{touch-action:none}
+.heads{flex:none;padding:0 12px 10px;touch-action:none}
+.head{display:flex;gap:8px;align-items:center}
+.ttl{flex:1}
+.ttl small{display:block;color:var(--mute);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+h1{font:700 19px/1.15 system-ui,-apple-system,sans-serif;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+h2{font:700 15px/1.2 system-ui,-apple-system,sans-serif;margin:16px 0 6px}
+.body{overflow-y:auto;padding:0 12px 12px;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.row+.row{margin-top:10px}
+.row+.row{margin-top:8px}
 .row .btn{flex:1}
-.head.row .btn{flex:none}
-h1{font:700 20px/1.1 'Barlow Condensed',sans-serif;letter-spacing:.01em;margin:0;flex:1}
-h2{font:700 17px/1.1 'Barlow Condensed',sans-serif;margin:16px 0 6px}
 .hint{color:var(--mute);font-size:14px;margin:4px 0 0}
-.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px}
-.stat{background:rgba(255,255,255,.05);border-radius:10px;padding:8px}
-.stat b{display:block;font:700 20px/1.1 'Barlow Condensed',sans-serif;white-space:nowrap}
-.stat span{color:var(--mute);font-size:13px}
-.tog{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:44px;border-top:1px solid var(--line);padding:4px 0}
-.tog:first-child{border-top:0}
+.tabs{display:flex;background:rgba(255,255,255,.07);border-radius:12px;padding:3px;gap:3px;position:sticky;top:0;z-index:1;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.tabs button{flex:1;height:38px;border:0;border-radius:9px;background:none;font-weight:600;color:var(--mute);cursor:pointer}
+.tabs button.on{background:#2c342d;color:var(--ink)}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px}
+.stat{background:rgba(255,255,255,.05);border-radius:10px;padding:7px 8px}
+.stat b{display:block;font-weight:700;font-size:17px;line-height:1.15;white-space:nowrap}
+.stat span{color:var(--mute);font-size:12px;line-height:1.2;display:block}
+.tog{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:48px;border-top:1px solid var(--line);padding:4px 0}
 .tog label{flex:1;cursor:pointer}
 .tog small{display:block;color:var(--mute);font-size:13px}
-.sw{appearance:none;-webkit-appearance:none;width:48px;height:28px;border-radius:14px;background:#3a423a;position:relative;cursor:pointer;flex:none;transition:background .15s;margin:0}
-.sw::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;transition:transform .15s}
+.sw{appearance:none;-webkit-appearance:none;width:50px;height:30px;border-radius:15px;background:#3a423a;position:relative;cursor:pointer;flex:none;transition:background .15s;margin:0}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:transform .15s}
 .sw:checked{background:var(--green)}.sw.r:checked{background:var(--rain)}
 .sw:checked::after{transform:translateX(20px)}
 .sw:focus-visible{outline:2px solid var(--green);outline-offset:2px}
-input[type=range]{width:100%;accent-color:var(--green);height:28px}
-.slider{display:grid;grid-template-columns:4.2em minmax(0,1fr) 3.2em;gap:10px;align-items:center;font-size:14px;color:var(--mute)}
+input[type=range]{width:100%;accent-color:var(--green);height:32px;margin:0}
+.slider{display:grid;grid-template-columns:4.4em minmax(0,1fr) 3em;gap:10px;align-items:center;font-size:14px;color:var(--mute);padding-bottom:6px}
 .slider output{text-align:right;color:var(--ink);font-variant-numeric:tabular-nums}
 .legend{height:10px;border-radius:5px;margin:6px 0 2px}
-.legend-l{display:flex;justify-content:space-between;color:var(--mute);font-size:13px}
-.field-in{width:100%;height:44px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.06);padding:0 12px;font-size:16px;outline:none}
-textarea.field-in{height:64px;padding:10px 12px;resize:vertical;margin-top:8px}
+.legend-l{display:flex;justify-content:space-between;color:var(--mute);font-size:13px;padding-bottom:6px}
+.field-in{width:100%;height:44px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.06);padding:0 12px;font-size:16px;outline:none;-webkit-appearance:none;appearance:none}
+textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;display:block}
 .field-in:focus{border-color:var(--green)}
-.items{margin:8px 0 0;padding:0;list-style:none}
-.items li{display:flex;gap:8px;padding:6px 0;border-top:1px solid var(--line);font-size:14px}
-.items b{flex:none;width:2.4em;color:var(--rain)}
+
+/* dirt work items */
+.item{border:1px solid var(--line);border-radius:12px;padding:10px;margin-top:8px;transition:border-color .3s,background .3s}
+.item.flash{border-color:var(--rain);background:rgba(79,179,255,.12)}
+.item-h{display:flex;gap:8px;align-items:center}
+.tag{flex:none;min-width:36px;text-align:center;padding:3px 6px;border-radius:7px;font-weight:700;font-size:13px;color:#fff;background:#1658c4}
+.tag.low{background:#0a3d8f}.tag.old{background:#1f8f3a}
+.item-t{flex:1;font-weight:600;line-height:1.25}
+.item-t small{display:block;font-weight:400;color:var(--mute);font-size:13px}
+.item-r{margin:8px 0;font-size:14px}
+.item select{width:100%;height:44px;border-radius:10px;border:1px solid var(--line);background:#232a24;padding:0 10px;font-size:16px}
+.key{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--mute);margin-top:8px}
+.key i{display:inline-block;width:18px;height:4px;border-radius:2px;vertical-align:middle;margin-right:5px}
 .hide{display:none!important}
-.status{color:var(--warn);font-size:14px;margin-top:8px}
-.vtx{width:16px;height:16px;border-radius:50%;background:var(--green);border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.5)}
-.outlet{background:var(--rain);color:#04223a;font:600 12px Barlow;padding:3px 7px;border-radius:8px;border:2px solid #fff;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.5)}
-.maplibregl-ctrl-bottom-right{bottom:auto;top:calc(env(safe-area-inset-top) + 62px)}
-@media(prefers-reduced-motion:reduce){.sw,.sw::after,.card{transition:none}}
+.status{color:var(--warn);font-size:14px;margin:0 0 8px}
+.vtx{width:22px;height:22px;border-radius:50%;background:var(--green);border:3px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.6);cursor:grab}
+.vtx::after{content:"";position:absolute;inset:-12px}
+.vtx.first{background:#fff;border-color:var(--green)}
+.ver{color:var(--mute);font-size:12px;text-align:center;margin:14px 0 0}
+@media(prefers-reduced-motion:reduce){.sw,.sw::after,.card,.item{transition:none}}
 </style>
 </head>
 <body>
@@ -90,7 +113,7 @@ textarea.field-in{height:64px;padding:10px 12px;resize:vertical;margin-top:8px}
 
 <div class="top">
   <form class="search" id="searchForm">
-    <input id="q" type="search" placeholder="Address, town, or lat, lng" autocomplete="off" aria-label="Search location">
+    <input id="q" type="search" placeholder="Address, town, or lat, lng" autocomplete="off" enterkeyhint="search" aria-label="Search location">
     <button class="btn" type="submit">Go</button>
   </form>
   <button class="btn" id="locate" title="My location" aria-label="My location">◎</button>
@@ -99,63 +122,78 @@ textarea.field-in{height:64px;padding:10px 12px;resize:vertical;margin-top:8px}
 <div class="sheet">
   <div class="card" id="card">
     <div class="grab" id="grab" role="button" aria-label="Drag or tap to resize panel" tabindex="0"></div>
+    <div class="heads" id="heads">
+      <div class="head" id="hIdle"><div class="ttl"><h1>Field Flow</h1><small>Terrain, water flow and dirt work</small></div></div>
+      <div class="head hide" id="hDraw"><div class="ttl"><h1>Tap each corner</h1><small id="drawHint">Drag a corner to adjust it.</small></div></div>
+      <div class="head hide" id="hField">
+        <div class="ttl"><h1 id="fTitle">Your field</h1><small id="fSub"></small></div>
+        <button class="btn sm" id="rainQuick" aria-pressed="false">Rain</button>
+        <button class="btn sm" id="q3d" aria-pressed="true">3D</button>
+        <button class="btn sm" id="frameBtn" aria-label="Center on field" title="Center on field">⌖</button>
+      </div>
+    </div>
     <div class="body" id="cardBody">
-      <!-- idle -->
       <div id="pIdle">
-        <div class="head row"><h1>Field terrain &amp; water flow</h1></div>
-        <p class="hint">Zoom to a field, tap <b>Draw field</b>, then tap its corners.</p>
+        <p class="hint" style="margin:0 0 10px">Zoom to a field, tap <b>Draw field</b>, then tap its corners.</p>
         <div class="row"><button class="btn primary" id="startDraw">Draw field</button></div>
       </div>
-      <!-- drawing -->
       <div id="pDraw" class="hide">
-        <div class="head row"><h1>Tap each corner of the field</h1></div>
-        <p class="hint" id="drawHint">0 points. Drag to move the map.</p>
         <div class="row">
           <button class="btn" id="undoPt">Undo</button>
           <button class="btn" id="cancelDraw">Cancel</button>
           <button class="btn primary" id="finishDraw" disabled>Finish</button>
         </div>
       </div>
-      <!-- field -->
       <div id="pField" class="hide">
-        <div class="head row">
-          <h1 id="fTitle">Your field</h1>
-          <button class="btn" id="rainQuick" aria-pressed="false">Rain</button>
-          <button class="btn" id="redraw">New field</button>
-        </div>
-        <div id="status" class="status"></div>
-        <div class="stats" id="stats"></div>
-        <div style="margin-top:8px">
-          <div class="tog"><label for="t3d">3D terrain<small>Two-finger drag to tilt</small></label><input type="checkbox" class="sw" id="t3d" checked></div>
-          <div class="slider" id="exWrap"><span>Height ×</span><input type="range" id="ex" min="1" max="10" step="0.5" value="4"><output id="exOut">4×</output></div>
-          <div class="tog"><label for="tRain">Rainfall flow<small>Drops run downhill and gather</small></label><input type="checkbox" class="sw r" id="tRain"></div>
-          <div class="slider hide" id="rainWrap"><span>Rain</span><input type="range" id="rainAmt" min="300" max="5000" step="100" value="1800"><output id="rainOut">1.8k</output></div>
-          <div class="tog"><label for="tChan">Flow paths<small>Where runoff concentrates</small></label><input type="checkbox" class="sw r" id="tChan"></div>
-          <div class="slider hide" id="chanWrap"><span>Detail</span><input type="range" id="chanThr" min="1" max="9" step="1" value="5"><output id="chanOut">5</output></div>
-          <div class="tog"><label for="tPond">Ponding spots<small>Low spots with no way out</small></label><input type="checkbox" class="sw r" id="tPond"></div>
-          <div class="tog"><label for="tElev">Elevation colors<small>Low to high across the field</small></label><input type="checkbox" class="sw" id="tElev"></div>
-          <div id="legend" class="hide"><div class="legend" id="legBar"></div><div class="legend-l"><span id="legLo"></span><span id="legHi"></span></div></div>
-          <div class="tog"><label for="tRoads">Roads &amp; labels</label><input type="checkbox" class="sw" id="tRoads" checked></div>
+        <div id="status" class="status hide"></div>
+        <div class="tabs" role="tablist">
+          <button id="tabView" class="on" role="tab">Map</button>
+          <button id="tabWork" role="tab">Dirt work</button>
         </div>
 
-        <h2>Dirt work report</h2>
-        <p class="hint" id="itemsHint">Low spots and flow paths a contractor can bid on.</p>
-        <ul class="items" id="items"></ul>
-        <div style="margin-top:8px"><input class="field-in" id="fname" type="text" placeholder="Field name for the report" maxlength="60"></div>
-        <textarea class="field-in" id="fnotes" placeholder="Notes for the contractor (optional): access, tile, timing…" maxlength="600"></textarea>
-        <div class="row" style="margin-top:8px">
-          <button class="btn primary" id="pdfBtn" disabled>Report (PDF)</button>
-          <button class="btn" id="kmlBtn" disabled>GPS file (KML)</button>
+        <div id="vView">
+          <div class="stats" id="stats"></div>
+          <div style="margin-top:8px">
+            <div class="tog"><label for="t3d">3D terrain<small>Two-finger drag up or down to tilt</small></label><input type="checkbox" class="sw" id="t3d" checked></div>
+            <div class="slider" id="exWrap"><span>Height ×</span><input type="range" id="ex" min="1" max="10" step="0.5" value="4" aria-label="Height exaggeration"><output id="exOut">4×</output></div>
+            <div class="tog"><label for="tRain">Rainfall flow<small>Drops run downhill and gather</small></label><input type="checkbox" class="sw r" id="tRain"></div>
+            <div class="slider hide" id="rainWrap"><span>Rain</span><input type="range" id="rainAmt" min="300" max="4000" step="100" value="1500" aria-label="Rain amount"><output id="rainOut">1.5k</output></div>
+            <div class="tog"><label for="tPlan">Dirt work plan<small>Waterways, tile routes and low spots</small></label><input type="checkbox" class="sw" id="tPlan" checked></div>
+            <div class="tog"><label for="tChan">Flow paths<small>Where runoff concentrates</small></label><input type="checkbox" class="sw r" id="tChan"></div>
+            <div class="slider hide" id="chanWrap"><span>Detail</span><input type="range" id="chanThr" min="1" max="9" step="1" value="5" aria-label="Flow path detail"><output id="chanOut">5</output></div>
+            <div class="tog"><label for="tPond">Ponding spots<small>Low spots with no way out</small></label><input type="checkbox" class="sw r" id="tPond"></div>
+            <div class="tog"><label for="tElev">Elevation colors<small>Low to high across the field</small></label><input type="checkbox" class="sw" id="tElev"></div>
+            <div id="legend" class="hide"><div class="legend" id="legBar"></div><div class="legend-l"><span id="legLo"></span><span id="legHi"></span></div></div>
+            <div class="tog"><label for="tRoads">Roads &amp; labels</label><input type="checkbox" class="sw" id="tRoads" checked></div>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <button class="btn" id="editField">Edit corners</button>
+            <button class="btn" id="redraw">New field</button>
+          </div>
         </div>
-        <p class="hint" id="reportMsg" style="font-size:13px"></p>
-        <p class="hint" style="font-size:13px">Elevation is USGS data (mostly ~10 m resolution). It shows field-scale drainage well; tile lines and small rills are below its resolution.</p>
+
+        <div id="vWork" class="hide">
+          <p class="hint" id="itemsHint" style="margin-top:10px"></p>
+          <div class="key"><span><i style="background:#39d353"></i>Existing waterway</span><span><i style="background:#2f7bff"></i>Waterway needed</span><span><i style="background:var(--tile)"></i>Tile route</span></div>
+          <div id="items"></div>
+          <h2>Report for the contractor</h2>
+          <input class="field-in" id="fname" type="text" placeholder="Field name" maxlength="60" autocomplete="off">
+          <textarea class="field-in" id="fnotes" placeholder="Notes (optional): access, known tile, timing…" maxlength="600"></textarea>
+          <div class="row" style="margin-top:8px">
+            <button class="btn primary" id="pdfBtn" disabled>Report (PDF)</button>
+            <button class="btn" id="kmlBtn" disabled>GPS file (KML)</button>
+          </div>
+          <p class="hint" id="reportMsg" style="font-size:13px"></p>
+          <p class="hint" style="font-size:13px">Planning-level only. Elevation is USGS data at about 10 m resolution, and existing waterways are judged from the aerial photo. Change any item above if you know better. Existing tile is not mapped.</p>
+        </div>
+        <p class="ver" id="ver"></p>
       </div>
     </div>
   </div>
 </div>
 
-<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-<script src="engine.js"></script>
-<script src="app.js"></script>
+<script src="vendor/maplibre-gl.js"></script>
+<script src="engine.js?v=3"></script>
+<script src="app.js?v=3"></script>
 </body>
 </html>

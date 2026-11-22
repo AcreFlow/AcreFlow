@@ -1,27 +1,29 @@
-/* Field Flow app: map, field drawing, overlays, rain, draggable panel, report export. */
+/* Field Flow app: map, field drawing, overlays, rain, dirt work plan, report export. */
 {
 'use strict';
+const VERSION = '3';
 const $ = id => document.getElementById(id);
 const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
 const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
-const { FT, ACRE, rampColor, ELEV_RAMP } = FieldEngine;
+const E = FieldEngine, { FT, ACRE, rampColor, ELEV_RAMP } = E;
 
 const store = { get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
 const saved = store.get('ftf-view');
+$('ver').textContent = 'Field Flow v' + VERSION;
 
 const map = new maplibregl.Map({
   container: 'map',
   center: saved ? saved.c : [-90.19, 41.30],
   zoom: saved ? saved.z : 13,
-  maxPitch: 80,
-  attributionControl: { compact: true },
+  maxPitch: 75,
+  attributionControl: false,
   style: {
     version: 8,
     sources: {
       sat: { type: 'raster', tiles: [ESRI + 'World_Imagery/MapServer/tile/{z}/{y}/{x}'], tileSize: 256, maxzoom: 19, attribution: 'Imagery © Esri, Maxar, Earthstar Geographics' },
       roads: { type: 'raster', tiles: [ESRI + 'Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}'], tileSize: 256, maxzoom: 19 },
       places: { type: 'raster', tiles: [ESRI + 'Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'], tileSize: 256, maxzoom: 19 },
-      dem: { type: 'raster-dem', tiles: [DEM_URL], encoding: 'terrarium', tileSize: 256, maxzoom: 15, attribution: 'Elevation: AWS Terrain Tiles (USGS 3DEP)' },
+      dem: { type: 'raster-dem', tiles: [DEM_URL], encoding: 'terrarium', tileSize: 256, maxzoom: 15, attribution: 'Elevation: USGS 3DEP via AWS Terrain Tiles' },
       demhs: { type: 'raster-dem', tiles: [DEM_URL], encoding: 'terrarium', tileSize: 256, maxzoom: 15 }
     },
     layers: [
@@ -32,29 +34,30 @@ const map = new maplibregl.Map({
     ]
   }
 });
-map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-right');
+
+map.addControl(new maplibregl.AttributionControl({ compact: true }), 'top-left');
+map.addControl(new maplibregl.NavigationControl({ showZoom: false, visualizePitch: true }), 'top-right');
+const foldAttribution = () => { const a = document.querySelector('.maplibregl-ctrl-attrib'); if (a) { a.classList.remove('maplibregl-compact-show'); a.removeAttribute('open'); } };
+map.on('load', foldAttribution); setTimeout(foldAttribution, 2000);
 map.on('moveend', () => store.set('ftf-view', { c: map.getCenter().toArray(), z: map.getZoom() }));
 
 /* ---------- state ---------- */
-let mode = 'idle', pts = [], vtxMarkers = [], field = null, grid = null, outletMarker = null;
+let mode = 'idle', pts = [], vtxMarkers = [], field = null, grid = null, ov = {}, photo = 'none';
 const fc = f => ({ type: 'FeatureCollection', features: f });
 const empty = fc([]);
+const fieldSig = () => field ? field.map(p => p[0].toFixed(5) + ',' + p[1].toFixed(5)).join(';') : '';
 
 /* ---------- draggable panel ---------- */
-const card = $('card'), grab = $('grab');
-let sheet = 'full', sheetY = 0;
-const activePanel = () => [$('pIdle'), $('pDraw'), $('pField')].find(p => !p.classList.contains('hide'));
+const card = $('card'), grab = $('grab'), heads = $('heads');
+let sheet = 'full', sheetY = 0, drag = null;
 function sheetStops() {
   const H = card.offsetHeight, g = grab.offsetHeight;
-  const head = activePanel() && activePanel().querySelector('.head');
-  const peekVis = g + (head ? head.offsetHeight + 12 : 44);
-  return { full: 0, peek: Math.max(0, H - peekVis), min: Math.max(0, H - g) };
+  return { full: 0, peek: Math.max(0, H - g - heads.offsetHeight), min: Math.max(0, H - g - 2) };
 }
 function setSheetY(y) { sheetY = y; card.style.transform = `translateY(${y}px)`; }
-function snap(state) { sheet = state; setSheetY(sheetStops()[state]); }
-let drag = null;
+function snap(state) { sheet = state; setSheetY(sheetStops()[state]); if (state !== 'full') $('cardBody').scrollTop = 0; }
 function dragStart(e) {
-  if (e.target.closest('button,input,textarea,label,a')) return;
+  if (e.target.closest('button,input,textarea,select,label,a')) return;
   if (e.button !== undefined && e.button !== 0) return;
   drag = { y0: e.clientY, s0: sheetY, moved: 0, t0: performance.now(), id: e.pointerId };
   card.classList.add('dragging');
@@ -62,99 +65,126 @@ function dragStart(e) {
 }
 function dragMove(e) {
   if (!drag || e.pointerId !== drag.id) return;
-  const st = sheetStops(), dy = e.clientY - drag.y0;
+  const dy = e.clientY - drag.y0;
   drag.moved = Math.max(drag.moved, Math.abs(dy));
-  setSheetY(Math.max(0, Math.min(st.min, drag.s0 + dy)));
+  setSheetY(Math.max(0, Math.min(sheetStops().min, drag.s0 + dy)));
 }
 function dragEnd(e) {
   if (!drag || e.pointerId !== drag.id) return;
   card.classList.remove('dragging');
-  const st = sheetStops(), dy = e.clientY - drag.y0, dt = performance.now() - drag.t0;
+  const st = sheetStops(), dy = e.clientY - drag.y0, dt = performance.now() - drag.t0, order = ['full', 'peek', 'min'];
   if (drag.moved < 6) snap(sheet === 'full' ? 'peek' : 'full');
-  else if (dt < 250 && Math.abs(dy) > 30) {                       // flick
-    const order = ['full', 'peek', 'min'], i = order.indexOf(sheet);
-    snap(order[Math.max(0, Math.min(2, i + (dy > 0 ? 1 : -1)))]);
-  } else {
-    const best = Object.entries(st).reduce((a, b) => Math.abs(b[1] - sheetY) < Math.abs(a[1] - sheetY) ? b : a);
-    snap(best[0]);
-  }
+  else if (dt < 300 && Math.abs(dy) > 30) snap(order[Math.max(0, Math.min(2, order.indexOf(sheet) + (dy > 0 ? 1 : -1)))]);
+  else snap(Object.entries(st).reduce((a, b) => Math.abs(b[1] - sheetY) < Math.abs(a[1] - sheetY) ? b : a)[0]);
   drag = null;
 }
-function bindDrag(el) {
-  el.addEventListener('pointerdown', dragStart);
-  el.addEventListener('pointermove', dragMove);
-  el.addEventListener('pointerup', dragEnd);
-  el.addEventListener('pointercancel', dragEnd);
+for (const el of [grab, heads]) {
+  el.addEventListener('pointerdown', dragStart); el.addEventListener('pointermove', dragMove);
+  el.addEventListener('pointerup', dragEnd); el.addEventListener('pointercancel', dragEnd);
 }
-bindDrag(grab);
-document.querySelectorAll('.head').forEach(bindDrag);
 grab.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); snap(sheet === 'full' ? 'peek' : 'full'); } });
-new ResizeObserver(() => { if (!drag) snap(sheet); }).observe($('cardBody'));
+new ResizeObserver(() => { if (!drag) snap(sheet); }).observe(card);
 addEventListener('resize', () => snap(sheet));
+document.addEventListener('gesturestart', e => e.preventDefault());
 
-const show = m => {
+function show(m) {
   mode = m;
-  $('pIdle').classList.toggle('hide', m !== 'idle'); $('pDraw').classList.toggle('hide', m !== 'draw'); $('pField').classList.toggle('hide', m !== 'field');
+  for (const [k, id] of [['idle', 'Idle'], ['draw', 'Draw'], ['field', 'Field']]) { $('p' + id).classList.toggle('hide', m !== k); $('h' + id).classList.toggle('hide', m !== k); }
   $('cardBody').scrollTop = 0;
-  requestAnimationFrame(() => snap(m === 'draw' ? 'full' : sheet));
-};
+  if (m !== 'field') sheet = 'full';
+  snap(sheet);
+}
+function setTab(t) {
+  $('tabView').classList.toggle('on', t === 'view'); $('tabWork').classList.toggle('on', t === 'work');
+  $('vView').classList.toggle('hide', t !== 'view'); $('vWork').classList.toggle('hide', t !== 'work');
+  $('cardBody').scrollTop = 0;
+}
+$('tabView').onclick = () => setTab('view');
+$('tabWork').onclick = () => setTab('work');
 
+/* ---------- map layers ---------- */
 map.on('load', () => {
   map.addSource('field', { type: 'geojson', data: empty });
   map.addSource('mask', { type: 'geojson', data: empty });
   map.addSource('draft', { type: 'geojson', data: empty });
+  map.addSource('plan', { type: 'geojson', data: empty });
   map.addLayer({ id: 'mask', type: 'fill', source: 'mask', paint: { 'fill-color': '#000', 'fill-opacity': .45 } });
   map.addLayer({ id: 'field-line', type: 'line', source: 'field', paint: { 'line-color': '#fff', 'line-width': 2.5 } });
-  map.addLayer({ id: 'draft-line', type: 'line', source: 'draft', paint: { 'line-color': '#a4c639', 'line-width': 3, 'line-dasharray': [2, 1] } });
+  map.addLayer({ id: 'draft-fill', type: 'fill', source: 'draft', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#a4c639', 'fill-opacity': .15 } });
+  map.addLayer({ id: 'draft-line', type: 'line', source: 'draft', paint: { 'line-color': '#a4c639', 'line-width': 3 } });
+  const round = { 'line-cap': 'round', 'line-join': 'round' };
+  map.addLayer({ id: 'plan-case', type: 'line', source: 'plan', filter: ['in', ['get', 'kind'], ['literal', ['old', 'new', 'tile']]], layout: round, paint: { 'line-color': '#fff', 'line-width': 7, 'line-opacity': .85 } });
+  map.addLayer({ id: 'plan-old', type: 'line', source: 'plan', filter: ['==', ['get', 'kind'], 'old'], layout: round, paint: { 'line-color': '#39d353', 'line-width': 4 } });
+  map.addLayer({ id: 'plan-new', type: 'line', source: 'plan', filter: ['==', ['get', 'kind'], 'new'], layout: round, paint: { 'line-color': '#2f7bff', 'line-width': 4 } });
+  map.addLayer({ id: 'plan-tile', type: 'line', source: 'plan', filter: ['==', ['get', 'kind'], 'tile'], paint: { 'line-color': '#ff8a1e', 'line-width': 4, 'line-dasharray': [1.5, 1.2] } });
+  map.addLayer({ id: 'plan-tags', type: 'symbol', source: 'plan', filter: ['has', 'icon'], layout: { 'icon-image': ['get', 'icon'], 'icon-allow-overlap': true, 'icon-ignore-placement': true } });
+  map.on('click', 'plan-tags', e => { if (mode === 'field' && e.features[0]) focusItem(e.features[0].properties.id); });
   const f = store.get('ftf-field');
-  if (f && f.length >= 3) setField(f, false);
+  if (f && f.length >= 3) setField(f, false); else show('idle');
 });
+const PLAN_LAYERS = ['plan-case', 'plan-old', 'plan-new', 'plan-tile', 'plan-tags'];
+const vis = (id, on) => { if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none'); };
 
 /* ---------- search & locate ---------- */
 $('searchForm').addEventListener('submit', async e => {
   e.preventDefault();
   const q = $('q').value.trim(); if (!q) return;
-  const m = q.match(/^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/);
-  if (m) { map.flyTo({ center: [+m[2], +m[1]], zoom: 15 }); $('q').blur(); return; }
-  try {
-    const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q));
-    const j = await r.json();
-    if (j[0]) map.flyTo({ center: [+j[0].lon, +j[0].lat], zoom: 15 }); else $('q').value = 'Not found: ' + q;
-  } catch (err) { $('q').value = 'Search unavailable'; }
   $('q').blur();
+  const m = q.match(/^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/);
+  if (m) { map.flyTo({ center: [+m[2], +m[1]], zoom: 15 }); return; }
+  try {
+    const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q=' + encodeURIComponent(q));
+    const j = await r.json();
+    if (j[0]) map.flyTo({ center: [+j[0].lon, +j[0].lat], zoom: 15 }); else { $('q').value = ''; $('q').placeholder = 'Not found. Try a town or lat, lng'; }
+  } catch (err) { $('q').value = ''; $('q').placeholder = 'Search unavailable right now'; }
 });
 $('locate').onclick = () => {
   if (!navigator.geolocation) return;
-  navigator.geolocation.getCurrentPosition(p => map.flyTo({ center: [p.coords.longitude, p.coords.latitude], zoom: 16 }), () => {}, { enableHighAccuracy: true, timeout: 10000 });
+  $('locate').disabled = true;
+  navigator.geolocation.getCurrentPosition(
+    p => { $('locate').disabled = false; map.flyTo({ center: [p.coords.longitude, p.coords.latitude], zoom: 16 }); },
+    () => { $('locate').disabled = false; $('q').placeholder = 'Location is off. Search instead'; },
+    { enableHighAccuracy: true, timeout: 10000 });
 };
 
 /* ---------- drawing ---------- */
+let lastDrag = 0;
 function updateDraft() {
   const feats = [];
-  if (pts.length >= 2) feats.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: pts.length >= 3 ? [...pts, pts[0]] : pts } });
+  if (pts.length >= 3) feats.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [[...pts, pts[0]]] } });
+  else if (pts.length === 2) feats.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: pts } });
   map.getSource('draft').setData(fc(feats));
-  $('drawHint').textContent = pts.length + ' point' + (pts.length === 1 ? '' : 's') + (pts.length < 3 ? '. Need at least 3.' : '. Tap Finish when done.');
+  $('drawHint').textContent = pts.length < 3 ? `${pts.length} of at least 3 corners` : `${pts.length} corners, ${polyAcres(pts).toFixed(1)} ac. Drag to adjust, then Finish.`;
   $('finishDraw').disabled = pts.length < 3;
 }
+function addVtx(p) {
+  const el = document.createElement('div'); el.className = 'vtx' + (vtxMarkers.length ? '' : ' first');
+  const m = new maplibregl.Marker({ element: el, draggable: true }).setLngLat(p).addTo(map);
+  m.on('drag', () => { const i = vtxMarkers.indexOf(m), q = m.getLngLat(); if (i >= 0) { pts[i] = [q.lng, q.lat]; updateDraft(); } });
+  m.on('dragend', () => { lastDrag = performance.now(); });
+  el.addEventListener('click', e => { e.stopPropagation(); if (performance.now() - lastDrag > 400 && vtxMarkers.indexOf(m) === 0 && pts.length >= 3) finishDraw(); });
+  vtxMarkers.push(m);
+}
 function clearVtx() { vtxMarkers.forEach(m => m.remove()); vtxMarkers = []; }
-$('startDraw').onclick = startDraw;
-$('redraw').onclick = startDraw;
-function startDraw() {
-  setRain(false); clearAnalysis(); clearVtx(); pts = [];
+function startDraw(edit) {
+  const keep = edit && field ? field.slice() : [];
+  setRain(false); clearAnalysis(); clearVtx();
   map.getSource('field').setData(empty); map.getSource('mask').setData(empty);
-  map.setTerrain(null); map.easeTo({ pitch: 0, bearing: 0 });
+  map.setTerrain(null); map.easeTo({ pitch: 0, bearing: 0, padding: { top: 0, bottom: 0, left: 0, right: 0 }, freezeElevation: true });
+  pts = keep; pts.forEach(addVtx);
   show('draw'); updateDraft();
 }
+function finishDraw() { if (pts.length < 3) return; const p = pts.slice(); clearVtx(); pts = []; map.getSource('draft').setData(empty); setField(p, true); }
+$('startDraw').onclick = () => startDraw(false);
+$('redraw').onclick = () => startDraw(false);
+$('editField').onclick = () => startDraw(true);
 map.on('click', e => {
-  if (mode !== 'draw') return;
-  const p = [e.lngLat.lng, e.lngLat.lat]; pts.push(p);
-  const el = document.createElement('div'); el.className = 'vtx';
-  vtxMarkers.push(new maplibregl.Marker({ element: el }).setLngLat(p).addTo(map));
-  updateDraft();
+  if (mode !== 'draw' || performance.now() - lastDrag < 400) return;
+  const p = [e.lngLat.lng, e.lngLat.lat]; pts.push(p); addVtx(p); updateDraft();
 });
 $('undoPt').onclick = () => { pts.pop(); const m = vtxMarkers.pop(); if (m) m.remove(); updateDraft(); };
 $('cancelDraw').onclick = () => { clearVtx(); pts = []; map.getSource('draft').setData(empty); const f = store.get('ftf-field'); if (f && f.length >= 3) setField(f, false); else show('idle'); };
-$('finishDraw').onclick = () => { const p = pts.slice(); clearVtx(); pts = []; map.getSource('draft').setData(empty); setField(p, true); };
+$('finishDraw').onclick = finishDraw;
 
 function polyAcres(poly) {
   const lat0 = poly.reduce((s, p) => s + p[1], 0) / poly.length * Math.PI / 180;
@@ -165,18 +195,43 @@ function polyAcres(poly) {
 
 function setField(poly, save) {
   field = poly; if (save) store.set('ftf-field', poly);
+  const o = store.get('ftf-ov'); ov = o && o.sig === fieldSig() ? o.ov : {};
   const ring = [...poly, poly[0]];
   map.getSource('field').setData(fc([{ type: 'Feature', geometry: { type: 'Polygon', coordinates: [ring] } }]));
   map.getSource('mask').setData(fc([{ type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]], ring.slice().reverse()] } }]));
-  sheet = 'full';
-  show('field');
-  $('fTitle').textContent = polyAcres(poly).toFixed(1) + ' acre field';
-  const b = poly.reduce((a, p) => [Math.min(a[0], p[0]), Math.min(a[1], p[1]), Math.max(a[2], p[0]), Math.max(a[3], p[1])], [180, 90, -180, -90]);
-  const pad = Math.min(innerWidth, innerHeight) * .1;
-  map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: { top: 70 + pad, bottom: Math.min(innerHeight * .5, 380) + pad * .3, left: pad, right: pad }, pitch: $('t3d').checked ? 55 : 0, duration: 1200 });
-  apply3D();
+  sheet = 'full'; show('field'); setTab('view'); titles();
+  apply3D(false);
+  requestAnimationFrame(() => frameField(1000));
   analyze(poly);
 }
+function titles() {
+  const ac = polyAcres(field).toFixed(1), name = $('fname').value.trim();
+  $('fTitle').textContent = name || ac + ' acre field';
+  $('fSub').textContent = (name ? ac + ' ac' : '') + (grid ? (name ? ' · ' : '') + ((grid.mx - grid.mn) * FT).toFixed(1) + ' ft of relief' : name ? '' : 'Reading elevation…');
+}
+// center the field in the part of the map the panel does not cover
+let frameToken = 0;
+map.on('movestart', e => { if (e.originalEvent) frameToken++; });      // a touch cancels any pending re-centering
+function frameField(dur, tries) {
+  if (!field) return;
+  const b = field.reduce((a, p) => [Math.min(a[0], p[0]), Math.min(a[1], p[1]), Math.max(a[2], p[0]), Math.max(a[3], p[1])], [180, 90, -180, -90]);
+  const top = $('searchForm').getBoundingClientRect().bottom + 14, cardTop = card.getBoundingClientRect().top;
+  const padding = { top, bottom: Math.min(innerHeight * .62, innerHeight - cardTop) + 14, left: 18, right: 18 };
+  const pitch = $('t3d').checked ? 50 : 0, center = [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
+  // zoom that fits the field in the open area (MapLibre screen px = 2 x 256-px world px at the same zoom)
+  const dx = lngToX(b[2], 0) - lngToX(b[0], 0), dy = latToY(b[1], 0) - latToY(b[3], 0);
+  const availW = Math.max(120, innerWidth - padding.left - padding.right), availH = Math.max(120, innerHeight - padding.top - padding.bottom);
+  const zoom = Math.min(19, Math.log2(Math.min(availW / (2 * dx), availH / (2 * dy)))) - (pitch ? .4 : .08);
+  const token = ++frameToken;
+  map.easeTo({ center, zoom, pitch, bearing: 0, padding, duration: dur == null ? 700 : dur, freezeElevation: true });
+  // with 3D on, the ground height is only known once terrain has loaded; re-aim if the field landed off target
+  if ((tries || 0) < 3) map.once('idle', () => {
+    if (token !== frameToken || mode !== 'field') return;
+    const p = map.project(center), tx = padding.left + availW / 2, ty = padding.top + availH / 2;
+    if (Math.hypot(p.x - tx, p.y - ty) > 14 || Math.abs(map.getZoom() - zoom) > .15) frameField(350, (tries || 0) + 1);
+  });
+}
+$('frameBtn').onclick = () => frameField();
 
 /* ---------- mercator helpers ---------- */
 const worldPx = z => 256 * Math.pow(2, z);
@@ -184,13 +239,21 @@ const lngToX = (lng, z) => (lng + 180) / 360 * worldPx(z);
 const latToY = (lat, z) => { const s = Math.sin(lat * Math.PI / 180); return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * worldPx(z); };
 const xToLng = (x, z) => x / worldPx(z) * 360 - 180;
 const yToLat = (y, z) => { const n = Math.PI - 2 * Math.PI * y / worldPx(z); return 180 / Math.PI * Math.atan(Math.sinh(n)); };
-function loadImg(url) { return new Promise((res, rej) => { const im = new Image(); im.crossOrigin = 'anonymous'; im.onload = () => res(im); im.onerror = rej; im.src = url; }); }
+function loadImg(url) { return new Promise((res, rej) => { const im = new Image(); im.crossOrigin = 'anonymous'; im.onload = () => res(im); im.onerror = () => rej(new Error('tile')); im.src = url; }); }
+async function mosaic(urlFor, z, x0, y0, w, h) {
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const cx = cv.getContext('2d', { willReadFrequently: true }), jobs = [];
+  for (let tx = Math.floor(x0 / 256); tx <= Math.floor((x0 + w - 1) / 256); tx++) for (let ty = Math.floor(y0 / 256); ty <= Math.floor((y0 + h - 1) / 256); ty++)
+    jobs.push(loadImg(urlFor(z, tx, ty)).then(im => cx.drawImage(im, tx * 256 - x0, ty * 256 - y0)));
+  await Promise.all(jobs);
+  return { canvas: cv, data: cx.getImageData(0, 0, w, h).data, w, h };
+}
 
 /* ---------- analysis ---------- */
 let runId = 0;
 async function analyze(poly) {
-  const id = ++runId;
   clearAnalysis();
+  const id = runId;
   setStatus('Reading elevation…');
   let lo = [180, 90], hi = [-180, -90];
   poly.forEach(p => { lo = [Math.min(lo[0], p[0]), Math.min(lo[1], p[1])]; hi = [Math.max(hi[0], p[0]), Math.max(hi[1], p[1])]; });
@@ -199,50 +262,52 @@ async function analyze(poly) {
   let z = 15, x0, x1, y0, y1;
   for (; z >= 10; z--) { x0 = Math.floor(lngToX(lo[0], z)); x1 = Math.ceil(lngToX(hi[0], z)); y0 = Math.floor(latToY(hi[1], z)); y1 = Math.ceil(latToY(lo[1], z)); if (Math.max(x1 - x0, y1 - y0) <= 700) break; }
   const W = x1 - x0, H = y1 - y0, N = W * H;
-  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
-  const cx = cv.getContext('2d', { willReadFrequently: true });
-  const jobs = [];
-  for (let tx = Math.floor(x0 / 256); tx <= Math.floor((x1 - 1) / 256); tx++) for (let ty = Math.floor(y0 / 256); ty <= Math.floor((y1 - 1) / 256); ty++)
-    jobs.push(loadImg(DEM_URL.replace('{z}', z).replace('{x}', tx).replace('{y}', ty)).then(im => cx.drawImage(im, tx * 256 - x0, ty * 256 - y0)));
-  try { await Promise.all(jobs); } catch (e) { if (id === runId) setStatus('Could not load elevation data. Check your connection and try again.'); return; }
+  let dem;
+  try { dem = await mosaic((zz, tx, ty) => DEM_URL.replace('{z}', zz).replace('{x}', tx).replace('{y}', ty), z, x0, y0, W, H); }
+  catch (e) { if (id === runId) setStatus('Could not load elevation data. Check your signal, then tap Edit corners and Finish to retry.'); return; }
   if (id !== runId) return;
   setStatus('Tracing water flow…');
   await new Promise(r => setTimeout(r, 30));
-  const px = cx.getImageData(0, 0, W, H).data, E = new Float32Array(N);
-  for (let i = 0; i < N; i++) E[i] = px[i * 4] * 256 + px[i * 4 + 1] + px[i * 4 + 2] / 256 - 32768;
-  const latC = (lo[1] + hi[1]) / 2, cs = 40075016.686 * Math.cos(latC * Math.PI / 180) / worldPx(z);
-  const pp = poly.map(p => [lngToX(p[0], z) - x0, latToY(p[1], z) - y0]);
-  const g = FieldEngine.analyzeGrid(E, W, H, cs, pp, (gx, gy) => [xToLng(x0 + gx, z), yToLat(y0 + gy, z)]);
   if (id !== runId) return;
-  if (!g) { setStatus('Field is too small to analyze.'); return; }
+  const px = dem.data, elev = new Float32Array(N);
+  for (let i = 0; i < N; i++) elev[i] = px[i * 4] * 256 + px[i * 4 + 1] + px[i * 4 + 2] / 256 - 32768;
+  const cs = 40075016.686 * Math.cos((lo[1] + hi[1]) / 2 * Math.PI / 180) / worldPx(z);
+  const pp = poly.map(p => [lngToX(p[0], z) - x0, latToY(p[1], z) - y0]);
+  const g = E.analyzeGrid(elev, W, H, cs, pp, (gx, gy) => [xToLng(x0 + gx, z), yToLat(y0 + gy, z)]);
+  if (!g) { setStatus('That field is too small to analyze. Tap Edit corners to redraw it.'); return; }
   g.z = z; g.x0 = x0; g.y0 = y0; g.fieldAc = polyAcres(poly);
-  g.coords = [[xToLng(x0, z), yToLat(y0, z)], [xToLng(x0 + W, z), yToLat(y0, z)], [xToLng(x0 + W, z), yToLat(y0 + H, z)], [xToLng(x0, z), yToLat(y0 + H, z)]];
+  g.coords = [g.toLL(0, 0), g.toLL(W, 0), g.toLL(W, H), g.toLL(0, H)];
   grid = g;
 
   $('stats').innerHTML = [
-    [((g.mx - g.mn) * FT).toFixed(1) + ' ft', 'Relief (low to high)'],
+    [((g.mx - g.mn) * FT).toFixed(1) + ' ft', 'Relief'],
     [g.slopePct.toFixed(1) + '%', 'Average slope'],
     [g.pondAc.toFixed(1) + ' ac', 'Ponding area'],
     [(g.mn * FT).toFixed(0) + ' ft', 'Lowest point'],
     [(g.mx * FT).toFixed(0) + ' ft', 'Highest point'],
-    [g.outletAc.toFixed(0) + ' ac', 'Drains to main outlet']
+    [g.outletAc.toFixed(0) + ' ac', 'To main outlet']
   ].map(s => `<div class="stat"><b>${s[0]}</b><span>${s[1]}</span></div>`).join('');
   $('legLo').textContent = (g.mn * FT).toFixed(0) + ' ft'; $('legHi').textContent = (g.mx * FT).toFixed(0) + ' ft';
   $('legBar').style.background = 'linear-gradient(90deg,' + ELEV_RAMP.map(r => `rgb(${r[1]}) ${r[0] * 100}%`).join(',') + ')';
-
-  if (g.outlet >= 0) {
-    const ox = g.outlet % W, oy = (g.outlet - ox) / W;
-    const el = document.createElement('div'); el.className = 'outlet'; el.textContent = 'Main outlet';
-    outletMarker = new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat(g.toLL(ox + .5, oy + .5)).addTo(map);
-  }
   buildOverlays();
-  renderItems();
-  setStatus('');
+  photo = g.waterways.length ? 'loading' : 'none';
+  refreshPlan(); titles(); setStatus('');
+  $('pdfBtn').disabled = false; $('kmlBtn').disabled = false;
   if (rainOn) startRain();
+
+  // aerial photo: used to spot waterways that are already grassed, and as the report's second map
+  const k = Math.pow(2, Math.max(0, Math.min(17 - z, Math.floor(Math.log2(1600 / Math.max(W, H))))));
+  let img = null;
+  try { img = await mosaic((zz, tx, ty) => `${ESRI}World_Imagery/MapServer/tile/${zz}/${ty}/${tx}`, z + Math.log2(k), x0 * k, y0 * k, W * k, H * k); img.k = k; } catch (e) {}
+  if (id !== runId) return;
+  g.img = img;
+  E.checkWaterways(g, img);
+  photo = img ? 'done' : 'failed';
+  refreshPlan();
 }
 function setStatus(t) { $('status').textContent = t; $('status').classList.toggle('hide', !t); }
 
-/* ---------- overlays ---------- */
+/* ---------- raster overlays ---------- */
 function makeImage(fn) {
   const { W, H } = grid, c = document.createElement('canvas'); c.width = W; c.height = H;
   const x = c.getContext('2d'), im = x.createImageData(W, H);
@@ -257,50 +322,152 @@ function chanImage() {
 function buildOverlays() {
   const g = grid, span = Math.max(g.mx - g.mn, 0.3);
   const elevURL = makeImage(i => { const c = rampColor((g.S[i] - g.mn) / span); return [c[0] | 0, c[1] | 0, c[2] | 0, 200]; });
-  const pondURL = makeImage(i => { const d = g.P[i]; if (d <= FieldEngine.POND_M) return null; const t = Math.min(1, d / 0.4); return [20, (90 + 60 * (1 - t)) | 0, 230, (150 + 100 * t) | 0]; });
-  const add = (id, url, vis, op) => {
+  const pondURL = makeImage(i => { const d = g.P[i]; if (d <= E.POND_M) return null; const t = Math.min(1, d / 0.4); return [20, (90 + 60 * (1 - t)) | 0, 230, (150 + 100 * t) | 0]; });
+  const add = (id, url, on, op) => {
     map.addSource(id, { type: 'image', url, coordinates: g.coords });
-    map.addLayer({ id, type: 'raster', source: id, layout: { visibility: vis ? 'visible' : 'none' }, paint: { 'raster-opacity': op, 'raster-fade-duration': 0, 'raster-resampling': id === 'ov-elev' ? 'linear' : 'nearest' } }, 'mask');
+    map.addLayer({ id, type: 'raster', source: id, layout: { visibility: on ? 'visible' : 'none' }, paint: { 'raster-opacity': op, 'raster-fade-duration': 0, 'raster-resampling': id === 'ov-elev' ? 'linear' : 'nearest' } }, 'mask');
   };
   add('ov-elev', elevURL, $('tElev').checked, .8);
   add('ov-chan', chanImage(), $('tChan').checked, 1);
   add('ov-pond', pondURL, $('tPond').checked, .9);
 }
 function clearAnalysis() {
+  runId++;
   stopRainLoop(); clearRainCanvas();
   ['ov-pond', 'ov-chan', 'ov-elev'].forEach(id => { if (map.getLayer(id)) map.removeLayer(id); if (map.getSource(id)) map.removeSource(id); });
-  if (outletMarker) { outletMarker.remove(); outletMarker = null; }
-  grid = null; R = null;
-  $('stats').innerHTML = ''; $('items').innerHTML = ''; $('reportMsg').textContent = '';
+  if (map.getSource('plan')) map.getSource('plan').setData(empty);
+  grid = null; R = null; LAT = null; pdfCache = null; photo = 'none';
+  $('stats').innerHTML = ''; $('items').innerHTML = ''; $('itemsHint').textContent = ''; $('reportMsg').textContent = '';
+  $('tabWork').textContent = 'Dirt work';
   $('pdfBtn').disabled = true; $('kmlBtn').disabled = true;
 }
 
-/* ---------- rain: drops follow the drainage network, drawn over the map ---------- */
+/* ---------- dirt work plan: map layer + item list ---------- */
+function tagIcon(text, color) {
+  const id = 'tag-' + text + '-' + color;
+  if (map.hasImage(id)) return id;
+  const s = 2, c = document.createElement('canvas'), x = c.getContext('2d');
+  x.font = `bold ${14 * s}px system-ui, sans-serif`;
+  const w = Math.ceil(x.measureText(text).width) + 16 * s, h = 26 * s;
+  c.width = w; c.height = h;
+  x.font = `bold ${14 * s}px system-ui, sans-serif`;
+  x.fillStyle = '#fff'; x.beginPath(); x.roundRect ? x.roundRect(0, 0, w, h, 8 * s) : x.rect(0, 0, w, h); x.fill();
+  x.fillStyle = color; x.beginPath(); x.roundRect ? x.roundRect(2 * s, 2 * s, w - 4 * s, h - 4 * s, 6 * s) : x.rect(2 * s, 2 * s, w - 4 * s, h - 4 * s); x.fill();
+  x.fillStyle = '#fff'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(text, w / 2, h / 2 + s);
+  map.addImage(id, x.getImageData(0, 0, w, h), { pixelRatio: s });
+  return id;
+}
+function planFeatures() {
+  const g = grid, feats = [];
+  const line = (cellsArr, kind, id) => feats.push({ type: 'Feature', properties: { kind, id }, geometry: { type: 'LineString', coordinates: E.chaikin(cellsArr.map(c => E.cellLL(g, c)), 2) } });
+  const point = (llp, id, icon) => feats.push({ type: 'Feature', properties: { id, icon }, geometry: { type: 'Point', coordinates: llp } });
+  for (const w of g.waterways) {
+    if (ov[w.label] === 'skip') continue;
+    for (const r of E.waterwayRuns(g, w, ov[w.label])) line(r.pts, r.grass ? 'old' : 'new', w.label);
+    point(E.cellLL(g, w.mid), w.label, tagIcon(w.label, E.wwStatus(w, ov[w.label]) === 'existing' ? '#1f8f3a' : '#1658c4'));
+  }
+  for (const d of g.depressions) {
+    if (ov[d.label] === 'skip') continue;
+    if (E.lowMethod(d, ov[d.label]) === 'tile' && d.tile.pts.length > 1) line(d.tile.pts, 'tile', d.label);
+    point(d.pitLL, d.label, tagIcon(d.label, '#0a3d8f'));
+  }
+  return feats;
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function refreshPlan() {
+  if (!grid) return;
+  const g = grid;
+  pdfCache = null;
+  map.getSource('plan').setData(fc(planFeatures()));
+  const items = E.workItems(g, ov), byId = Object.fromEntries(items.map(i => [i.id, i]));
+  const all = [...g.depressions.map(d => ({ id: d.label, type: 'low', o: d })), ...g.waterways.map(w => ({ id: w.label, type: 'ww', o: w }))];
+  $('tabWork').textContent = items.length ? `Dirt work (${items.length})` : 'Dirt work';
+  $('itemsHint').textContent = !all.length ? 'No low spots or flow paths big enough to need dirt work showed up at this data resolution.'
+    : photo === 'loading' ? 'Checking the aerial photo for waterways that are already grassed…'
+    : photo === 'failed' ? 'The aerial photo did not load, so existing waterways could not be checked. Set each one yourself below.'
+    : 'Tap Map on an item to see it. Change the choice if you know the ground better than the data does.';
+  $('items').innerHTML = all.map(a => {
+    const it = byId[a.id], cur = ov[a.id] || 'auto';
+    const opt = (v, t) => `<option value="${v}"${cur === v ? ' selected' : ''}>${esc(t)}</option>`;
+    let sel, cls, line;
+    if (a.type === 'low') {
+      const d = a.o, auto = { tile: 'tile it', fill: 'fill it', drain: 'surface drain' }[E.lowMethod(d, null)];
+      cls = 'low'; line = `${d.areaAc.toFixed(1)} ac, up to ${d.maxFt.toFixed(1)} ft deep`;
+      sel = opt('auto', `Recommended: ${auto}`) + opt('tile', 'Tile it') + opt('fill', 'Fill it') + opt('drain', 'Surface drain') + opt('skip', 'Leave out of the report');
+    } else {
+      const w = a.o, st = w.check.status;
+      const auto = photo === 'loading' ? 'checking photo…' : st === 'existing' ? 'already grassed' : st === 'partial' ? 'partly grassed' : st === 'none' ? 'no waterway seen' : 'not checked';
+      cls = it && it.status === 'existing' ? 'old' : ''; line = `${Math.round(w.lenFt).toLocaleString()} ft, drains ${w.drainAc.toFixed(1)} ac`;
+      sel = opt('auto', `Photo check: ${auto}`) + opt('existing', 'Already has a waterway') + opt('needs', 'Needs a waterway') + opt('skip', 'Leave out of the report');
+    }
+    return `<div class="item" id="item-${a.id}"><div class="item-h"><span class="tag ${cls}">${a.id}</span>` +
+      `<div class="item-t">${a.type === 'low' ? 'Low spot' : 'Flow path'}<small>${esc(line)}</small></div>` +
+      `<button class="btn sm" data-go="${a.id}">Map</button></div>` +
+      `<div class="item-r">${it ? esc(it.short) : 'Left out of the report'}</div>` +
+      `<select data-ov="${a.id}" aria-label="Choice for ${a.id}">${sel}</select></div>`;
+  }).join('');
+}
+$('items').addEventListener('change', e => {
+  const id = e.target.dataset.ov; if (!id) return;
+  if (e.target.value === 'auto') delete ov[id]; else ov[id] = e.target.value;
+  store.set('ftf-ov', { sig: fieldSig(), ov });
+  refreshPlan();
+});
+$('items').addEventListener('click', e => { const b = e.target.closest('[data-go]'); if (b) goItem(b.dataset.go); });
+function itemLL(id) {
+  const d = grid.depressions.find(x => x.label === id); if (d) return d.pitLL;
+  const w = grid.waterways.find(x => x.label === id); return w ? E.cellLL(grid, w.mid) : null;
+}
+function goItem(id) {
+  const p = grid && itemLL(id); if (!p) return;
+  if (!$('tPlan').checked) { $('tPlan').checked = true; PLAN_LAYERS.forEach(l => vis(l, true)); }
+  snap('peek');
+  const pad = { top: $('searchForm').getBoundingClientRect().bottom + 14, bottom: grab.offsetHeight + heads.offsetHeight + 30, left: 18, right: 18 };
+  map.easeTo({ center: p, zoom: Math.max(map.getZoom(), 16), padding: pad, duration: 800, freezeElevation: true });
+}
+function focusItem(id) {
+  setTab('work'); snap('full');
+  const el = $('item-' + id); if (!el) return;
+  requestAnimationFrame(() => { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1400); });
+}
+
+/* ---------- rain: drops follow the downhill direction, drawn over the map ---------- */
 const rc = $('rain'), rx = rc.getContext('2d');
-let dpr = 1, rainOn = false, rainRAF = 0, R = null;
-function sizeRain() { dpr = Math.min(window.devicePixelRatio || 1, 2); rc.width = Math.round(innerWidth * dpr); rc.height = Math.round(innerHeight * dpr); if (R) R.sx.fill(NaN); }
+let dpr = 1, rainOn = false, rainRAF = 0, R = null, LAT = null, latDirty = true, lastLat = 0;
+function sizeRain() { dpr = Math.min(window.devicePixelRatio || 1, 2); rc.width = Math.round(innerWidth * dpr); rc.height = Math.round(innerHeight * dpr); latDirty = true; if (R) R.sx.fill(NaN); }
 addEventListener('resize', sizeRain); sizeRain();
 function clearRainCanvas() { rx.globalCompositeOperation = 'source-over'; rx.clearRect(0, 0, rc.width, rc.height); }
+// project a coarse lattice of grid points to the screen once per map move; drops interpolate between them
+function buildLattice() {
+  const g = grid, step = Math.max(4, Math.ceil(Math.max(g.W, g.H) / 32)), nx = Math.floor(g.W / step) + 2, ny = Math.floor(g.H / step) + 2;
+  const sx = new Float32Array(nx * ny), sy = new Float32Array(nx * ny);
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const p = map.project(g.toLL(i * step, j * step)); sx[j * nx + i] = p.x * dpr; sy[j * nx + i] = p.y * dpr; }
+  LAT = { step, nx, ny, sx, sy }; latDirty = false; lastLat = performance.now();
+}
 function spawn(k) {
   const g = grid, c = g.cells[(Math.random() * g.cells.length) | 0], x = c % g.W, y = (c - x) / g.W;
-  R.c[k] = c; R.fx[k] = x + Math.random(); R.fy[k] = y + Math.random();
+  R.fx[k] = x + Math.random(); R.fy[k] = y + Math.random();
   R.ox[k] = (Math.random() - .5) * .8; R.oy[k] = (Math.random() - .5) * .8;
   R.age[k] = 0; R.life[k] = 160 + Math.random() * 300; R.sx[k] = NaN;
 }
 function initParticles() {
   const n = +$('rainAmt').value;
-  R = { n, c: new Int32Array(n), fx: new Float32Array(n), fy: new Float32Array(n), ox: new Float32Array(n), oy: new Float32Array(n),
-    age: new Float32Array(n), life: new Float32Array(n), sx: new Float32Array(n), sy: new Float32Array(n) };
+  R = { n, fx: new Float32Array(n), fy: new Float32Array(n), ox: new Float32Array(n), oy: new Float32Array(n), age: new Float32Array(n), life: new Float32Array(n), sx: new Float32Array(n), sy: new Float32Array(n) };
   for (let k = 0; k < n; k++) { spawn(k); R.age[k] = Math.random() * R.life[k] * .6; }
 }
-map.on('move', () => { if (R) { R.sx.fill(NaN); clearRainCanvas(); } });
+function rainMoved() { latDirty = true; if (R) { R.sx.fill(NaN); clearRainCanvas(); } }
+map.on('move', rainMoved);
+map.on('idle', () => { latDirty = true; });
 function rainFrame() {
   const g = grid; if (!g || !rainOn || !R) return;
+  rainRAF = requestAnimationFrame(rainFrame);
+  if (document.hidden) return;
+  if (latDirty || !LAT || performance.now() - lastLat > 1500) buildLattice();
   rx.globalCompositeOperation = 'destination-out'; rx.fillStyle = 'rgba(0,0,0,0.08)'; rx.fillRect(0, 0, rc.width, rc.height);
   rx.globalCompositeOperation = 'lighter';
   rx.strokeStyle = 'rgba(70,165,255,0.5)'; rx.lineWidth = 2.2 * dpr; rx.lineCap = 'butt';
   const ppc = Math.pow(2, map.getZoom() - g.z + 1);      // screen px per grid cell
-  const { W, H, D, GX, GY, P, x0, y0, z } = g, world = worldPx(z);
+  const { W, H, D, GX, GY, P, M } = g, L = LAT, st = L.step, lnx = L.nx;
   rx.beginPath();
   for (let k = 0; k < R.n; k++) {
     let fx = R.fx[k], fy = R.fy[k];
@@ -308,18 +475,15 @@ function rainFrame() {
     let budget = -1, steps = 0;
     while (steps++ < 6) {
       const ix = fx | 0, iy = fy | 0;
-      if (ix < 0 || iy < 0 || ix >= W || iy >= H) { budget = -2; break; }
+      if (fx < 0 || fy < 0 || ix >= W || iy >= H) { budget = -2; break; }
       const c = iy * W + ix;
-      // bilinear downhill direction
+      if (!M[c]) { budget = -2; break; }           // left the field
       const gx0 = Math.min(Math.max(fx - .5, 0), W - 1.001), gy0 = Math.min(Math.max(fy - .5, 0), H - 1.001);
       const bx = gx0 | 0, by = gy0 | 0, tx = gx0 - bx, ty = gy0 - by, j = by * W + bx;
       const gxv = GX[j] * (1 - tx) * (1 - ty) + GX[j + 1] * tx * (1 - ty) + GX[j + W] * (1 - tx) * ty + GX[j + W + 1] * tx * ty;
       const gyv = GY[j] * (1 - tx) * (1 - ty) + GY[j + 1] * tx * (1 - ty) + GY[j + W] * (1 - tx) * ty + GY[j + W + 1] * tx * ty;
-      const m = Math.hypot(gxv, gyv), pond = P[c] > FieldEngine.POND_M;
-      if (budget < 0) {   // screen speed from local slope: faster on steeper ground, a crawl through ponds
-        const pxSpeed = pond ? 0.45 : Math.min(6, Math.max(1.4, 1.4 + 160 * m));
-        budget = pxSpeed / ppc;
-      }
+      const m = Math.hypot(gxv, gyv), pond = P[c] > E.POND_M;
+      if (budget < 0) budget = (pond ? 0.45 : Math.min(6, Math.max(1.4, 1.4 + 160 * m))) / ppc;   // faster on steeper ground, a crawl through ponds
       let dx, dy;
       if (m > 2e-4 && !pond) { dx = -gxv / m; dy = -gyv / m; }
       else {                                   // flat or ponded: follow the drainage network out
@@ -334,37 +498,40 @@ function rainFrame() {
     }
     if (budget === -2) { spawn(k); continue; }
     R.fx[k] = fx; R.fy[k] = fy;
-    const lng = (x0 + fx) / world * 360 - 180, lat = 180 / Math.PI * Math.atan(Math.sinh(Math.PI - 2 * Math.PI * (y0 + fy) / world));
-    const p = map.project([lng, lat]), X = p.x * dpr, Y = p.y * dpr;
-    if (R.sx[k] === R.sx[k]) { rx.moveTo(R.sx[k], R.sy[k]); rx.lineTo(X, Y); }
+    const u = fx / st, v = fy / st, li = Math.max(0, Math.min(lnx - 2, u | 0)), lj = Math.max(0, Math.min(L.ny - 2, v | 0)), a = u - li, b = v - lj, o = lj * lnx + li;
+    const X = (L.sx[o] * (1 - a) + L.sx[o + 1] * a) * (1 - b) + (L.sx[o + lnx] * (1 - a) + L.sx[o + lnx + 1] * a) * b;
+    const Y = (L.sy[o] * (1 - a) + L.sy[o + 1] * a) * (1 - b) + (L.sy[o + lnx] * (1 - a) + L.sy[o + lnx + 1] * a) * b;
+    if (R.sx[k] === R.sx[k] && Math.abs(X - R.sx[k]) + Math.abs(Y - R.sy[k]) < 60 * dpr) { rx.moveTo(R.sx[k], R.sy[k]); rx.lineTo(X, Y); }
     R.sx[k] = X; R.sy[k] = Y;
   }
   rx.stroke();
-  rainRAF = requestAnimationFrame(rainFrame);
 }
-function startRain() { if (!grid) return; initParticles(); clearRainCanvas(); cancelAnimationFrame(rainRAF); rainRAF = requestAnimationFrame(rainFrame); }
+function startRain() { if (!grid) return; initParticles(); latDirty = true; clearRainCanvas(); cancelAnimationFrame(rainRAF); rainRAF = requestAnimationFrame(rainFrame); }
 function stopRainLoop() { cancelAnimationFrame(rainRAF); rainRAF = 0; }
 function setRain(on) {
   rainOn = on; $('tRain').checked = on;
   $('rainWrap').classList.toggle('hide', !on);
-  $('rainQuick').classList.toggle('rainon', on); $('rainQuick').setAttribute('aria-pressed', on);
+  $('rainQuick').classList.toggle('on', on); $('rainQuick').setAttribute('aria-pressed', on);
   if (on) startRain(); else { stopRainLoop(); clearRainCanvas(); }
 }
 
 /* ---------- controls ---------- */
-function apply3D() {
+function apply3D(tilt) {
   const on = $('t3d').checked;
   $('exWrap').classList.toggle('hide', !on);
-  if (on) { map.setTerrain({ source: 'dem', exaggeration: +$('ex').value }); if (map.getPitch() < 20 && mode === 'field') map.easeTo({ pitch: 55 }); }
-  else { map.setTerrain(null); map.easeTo({ pitch: 0 }); }
+  $('q3d').classList.toggle('on', on); $('q3d').setAttribute('aria-pressed', on);
+  map.setTerrain(on ? { source: 'dem', exaggeration: +$('ex').value } : null);
+  if (tilt !== false && mode === 'field') frameField(600);
+  rainMoved();
 }
-$('t3d').onchange = apply3D;
-$('ex').oninput = () => { $('exOut').textContent = $('ex').value + '×'; if ($('t3d').checked) map.setTerrain({ source: 'dem', exaggeration: +$('ex').value }); };
+$('t3d').onchange = () => apply3D();
+$('q3d').onclick = () => { $('t3d').checked = !$('t3d').checked; apply3D(); };
+$('ex').oninput = () => { $('exOut').textContent = $('ex').value + '×'; if ($('t3d').checked) { map.setTerrain({ source: 'dem', exaggeration: +$('ex').value }); rainMoved(); } };
 $('tRain').onchange = () => setRain($('tRain').checked);
 $('rainQuick').onclick = () => setRain(!rainOn);
 $('rainAmt').oninput = () => { $('rainOut').textContent = (+$('rainAmt').value / 1000).toFixed(1) + 'k'; };
 $('rainAmt').onchange = () => { if (rainOn) initParticles(); };
-const vis = (id, on) => { if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none'); };
+$('tPlan').onchange = () => PLAN_LAYERS.forEach(l => vis(l, $('tPlan').checked));
 $('tChan').onchange = () => { vis('ov-chan', $('tChan').checked); $('chanWrap').classList.toggle('hide', !$('tChan').checked); };
 $('chanThr').oninput = () => { $('chanOut').textContent = $('chanThr').value; };
 $('chanThr').onchange = () => { if (grid && map.getSource('ov-chan')) map.getSource('ov-chan').updateImage({ url: chanImage(), coordinates: grid.coords }); };
@@ -372,18 +539,12 @@ $('tPond').onchange = () => vis('ov-pond', $('tPond').checked);
 $('tElev').onchange = () => { vis('ov-elev', $('tElev').checked); $('legend').classList.toggle('hide', !$('tElev').checked); };
 $('tRoads').onchange = () => { vis('roads', $('tRoads').checked); vis('places', $('tRoads').checked); };
 
-/* ---------- dirt work report ---------- */
+/* ---------- report ---------- */
+let pdfCache = null;
 $('fname').value = store.get('ftf-name') || '';
 $('fnotes').value = store.get('ftf-notes') || '';
-$('fname').oninput = () => { store.set('ftf-name', $('fname').value); pdfCache = null; };
+$('fname').oninput = () => { store.set('ftf-name', $('fname').value); pdfCache = null; if (field) titles(); };
 $('fnotes').oninput = () => { store.set('ftf-notes', $('fnotes').value); pdfCache = null; };
-let pdfCache = null;
-function renderItems() {
-  const g = grid, list = FieldEngine.workItems(g);
-  $('items').innerHTML = list.map(it => `<li><b>${it.id}</b><span>${it.kind}: ${it.size}</span></li>`).join('');
-  $('itemsHint').textContent = list.length ? `${g.depressions.length} low spot${g.depressions.length === 1 ? '' : 's'} and ${g.waterways.length} flow path${g.waterways.length === 1 ? '' : 's'} found.` : 'No low spots or flow paths big enough to need dirt work at this data resolution.';
-  $('pdfBtn').disabled = false; $('kmlBtn').disabled = false; pdfCache = null;
-}
 const reportName = () => $('fname').value.trim() || 'Field';
 const fileBase = () => (reportName().replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'field') + '-dirt-work';
 function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('could not load ' + src)); document.head.appendChild(s); }); }
@@ -401,33 +562,33 @@ async function deliver(blob, name) {
 async function makePDF() {
   if (pdfCache) return pdfCache;
   if (!window.PDFLib) await loadScript('pdf-lib.min.js');
-  const ring = field, center = [ring.reduce((s, p) => s + p[0], 0) / ring.length, ring.reduce((s, p) => s + p[1], 0) / ring.length];
-  const bytes = await FieldEngine.buildPDF(grid, { name: reportName(), notes: $('fnotes').value.trim(),
-    date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }), center });
+  const center = [field.reduce((s, p) => s + p[0], 0) / field.length, field.reduce((s, p) => s + p[1], 0) / field.length];
+  const bytes = await E.buildPDF(grid, { name: reportName(), notes: $('fnotes').value.trim(), ov, aerial: grid.img || null, center,
+    date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) });
   pdfCache = { blob: new Blob([bytes], { type: 'application/pdf' }), name: fileBase() + '.pdf' };
   return pdfCache;
 }
 function reportMsg(t, retry) {
   const m = $('reportMsg'); m.textContent = t;
-  if (retry) { const b = document.createElement('button'); b.className = 'btn rainon'; b.style.marginTop = '8px'; b.textContent = 'Open / share report'; b.onclick = () => deliver(pdfCache.blob, pdfCache.name).then(() => reportMsg('')); m.appendChild(document.createElement('br')); m.appendChild(b); }
+  if (retry) {
+    const b = document.createElement('button'); b.className = 'btn on'; b.style.marginTop = '8px'; b.textContent = 'Open / share report';
+    b.onclick = () => deliver(pdfCache.blob, pdfCache.name).then(() => reportMsg(''));
+    m.appendChild(document.createElement('br')); m.appendChild(b);
+  }
 }
 $('pdfBtn').onclick = async () => {
   if (!grid) return;
-  const btn = $('pdfBtn'); btn.disabled = true; reportMsg('Building report…');
-  try {
-    const r = await makePDF();
-    const ok = await deliver(r.blob, r.name);
-    reportMsg(ok ? '' : 'Report ready.', !ok);
-  } catch (e) { reportMsg('Could not build the report: ' + e.message); }
+  const btn = $('pdfBtn'); btn.disabled = true; reportMsg(photo === 'loading' ? 'Building report (aerial photo still loading, so it is left out)…' : 'Building report…');
+  try { const r = await makePDF(), ok = await deliver(r.blob, r.name); reportMsg(ok ? '' : 'Report ready.', !ok); }
+  catch (e) { reportMsg('Could not build the report: ' + e.message); }
   btn.disabled = false;
 };
 $('kmlBtn').onclick = async () => {
   if (!grid) return;
-  const kml = FieldEngine.buildKML(grid, reportName());
-  const ok = await deliver(new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' }), fileBase() + '.kml');
+  const ok = await deliver(new Blob([E.buildKML(grid, reportName(), ov)], { type: 'application/vnd.google-earth.kml+xml' }), fileBase() + '.kml');
   if (!ok) reportMsg('Your browser blocked the share sheet. Tap GPS file again.');
 };
-// warm the PDF library once a field is loaded, so sharing stays inside the tap
+// load the PDF library ahead of time so sharing stays inside the tap
 map.once('idle', () => setTimeout(() => { if (!window.PDFLib) loadScript('pdf-lib.min.js').catch(() => {}); }, 3000));
 
 /* ---------- install as app ---------- */
