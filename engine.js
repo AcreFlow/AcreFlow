@@ -241,11 +241,28 @@ const soilTraits = u => [u.drain ? u.drain.toLowerCase() : null, u.hydgrp ? 'hyd
 function unitAt(g, cell) { const s = g.soil; if (!s) return null; const k = s.cellUnit[cell]; return k >= 0 ? s.units[k] : null; }
 /* productivity: per soil unit u.pi (Illinois B811 optimum PI), u.nccpi (0-1), u.corn, u.soy (bu/ac); weighted by acres in the field */
 const PROD = {
-  pi:    { label: 'Illinois PI', long: 'Illinois productivity index (Bulletin 811)', lo: 80, hi: 147, fmt: v => Math.round(v) + '' },
+  pi:    { label: 'Illinois PI', long: 'Illinois productivity index, Bulletin 811 optimum management, adjusted for slope and erosion', lo: 80, hi: 147, fmt: v => Math.round(v) + '' },
   nccpi: { label: 'NCCPI', long: 'National Commodity Crop Productivity Index', lo: 0.2, hi: 1, fmt: v => v.toFixed(2) },
-  corn:  { label: 'Corn yield', long: 'Soil survey corn yield rating', lo: 100, hi: 230, fmt: v => Math.round(v) + ' bu' },
-  soy:   { label: 'Soybean yield', long: 'Soil survey soybean yield rating', lo: 30, hi: 70, fmt: v => Math.round(v) + ' bu' }
+  corn:  { label: 'Corn yield', long: 'Corn yield (Bulletin 811 optimum in Illinois, soil survey rating elsewhere)', lo: 100, hi: 230, fmt: v => Math.round(v) + ' bu' },
+  soy:   { label: 'Soybean yield', long: 'Soybean yield (Bulletin 811 optimum in Illinois, soil survey rating elsewhere)', lo: 30, hi: 70, fmt: v => Math.round(v) + ' bu' }
 };
+// Bulletin 811 rating for a soil map unit: soil number from the map symbol (36B, 86C2, 8107A), slope from the name, erosion from the symbol
+const SLOPE_MID = { A: 1, B: 3.5, C: 7.5, D: 12.5, E: 17.5, F: 25, G: 40 };
+function b811For(u) {
+  if (typeof B811 === 'undefined' || !u) return null;
+  const m = String(u.musym || '').trim().toUpperCase().match(/^(\d+)([A-G])?(\d)?/); if (!m) return null;
+  let n = +m[1], r = B811[n];
+  if (!r && n >= 1000) { n = n % 1000; r = B811[n]; }               // phase prefixes (8107 = Sawmill, occasionally flooded) share the base rating
+  if (!r || r[3] == null) return null;
+  const head = s => String(s || '').toLowerCase().replace(/[^a-z]+/g, ' ').trim().slice(0, 4);
+  if (u.muname && head(u.muname) !== head(r[0])) return null;          // symbol and name must agree, or skip rather than guess
+  const sm = String(u.muname || '').match(/(\d+(?:\.\d+)?)\s*to\s*(\d+(?:\.\d+)?)\s*percent/i);
+  const mid = sm ? (+sm[1] + +sm[2]) / 2 : (SLOPE_MID[m[2]] || 1);
+  const name = String(u.muname || '').toLowerCase();
+  const ero = m[3] === '3' || /severely eroded/.test(name) ? 2 : m[3] === '2' || /(moderately )?eroded/.test(name) ? 1 : 0;
+  const row = B811_S3.find(s => mid <= s[0]), f = row[1 + (r[4] ? 3 : 0) + ero];
+  return { num: n, name: r[0], f, pi: r[3] * f, corn: r[1] != null ? r[1] * f : null, soy: r[2] != null ? r[2] * f : null };
+}
 function prodAvg(g, key) {
   if (!g.soil) return null; let s = 0, a = 0;
   for (const u of g.soil.units) if (u[key] != null && u.acres > 0) { s += u[key] * u.acres; a += u.acres; }
@@ -728,7 +745,7 @@ const NOTES = [
   'Before draining or reshaping any low spot, check with the county FSA/NRCS office (form AD-1026). Draining a wetland without a determination can cost USDA program eligibility.',
   'Do not divert or concentrate water onto a neighbor\'s land beyond its natural flow. Grassed waterways are often eligible for cost share (for example EQIP); ask the county SWCD/NRCS office.',
   'Call 811 (JULIE in Illinois) before any digging.',
-  'Productivity figures come from the USDA soil survey: the Illinois productivity index (University of Illinois Bulletin 811, optimum management), the NRCS National Commodity Crop Productivity Index (NCCPI), and the survey\'s corn and soybean yield ratings. Field averages are weighted by acres of each soil and are not adjusted for slope, erosion or drainage improvements.',
+  'Illinois productivity index and Illinois corn and soybean yields: University of Illinois Bulletin 811, Table S2 (optimum management), matched by Illinois soil number and adjusted for slope and erosion with Table S3. Other figures from the USDA soil survey: the NRCS National Commodity Crop Productivity Index (NCCPI), and the survey\'s corn and soybean yield ratings. Field averages are weighted by acres of each soil and are not adjusted for slope, erosion or drainage improvements.',
   'Coordinates are latitude, longitude (WGS84). The KML file from the app loads these items into Google Earth or most GPS and guidance software.'
 ];
 
@@ -867,6 +884,6 @@ function buildKML(g, name, ov) {
 ${pm}</Document></kml>`;
 }
 
-global.FieldEngine = { PROD, prodAvg, prodLine, applySoils, rasterizeSoils, parseWktPolygons, drainRank, spacingFor, soilRows, analyzeGrid, retune, WW_LEVELS, LOW_LEVELS, DEFAULT_TUNE, checkWaterways, wwStatus, lowMethod, waterwayRuns, chaikin, cellLL: ll, drawPlan, buildPDF, buildKML,
+global.FieldEngine = { b811For, PROD, prodAvg, prodLine, applySoils, rasterizeSoils, parseWktPolygons, drainRank, spacingFor, soilRows, analyzeGrid, retune, WW_LEVELS, LOW_LEVELS, DEFAULT_TUNE, checkWaterways, wwStatus, lowMethod, waterwayRuns, chaikin, cellLL: ll, drawPlan, buildPDF, buildKML,
   workItems, summaryLines, mainOn, noWork, rampColor, ELEV_RAMP, FT, ACRE, POND_M };
 })(window);

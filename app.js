@@ -1,7 +1,7 @@
 /* AcreFlow app: map, field drawing, overlays, rain, dirt work plan, report export. */
 {
 'use strict';
-const VERSION = '14';
+const VERSION = '15';
 const $ = id => document.getElementById(id);
 const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
 const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
@@ -476,6 +476,8 @@ async function loadProd(units) {
   };
   const maps = { nccpi: agg(nc, 'nccpi'), pi: agg(il, 'pi'), corn: agg(il, 'corn'), soy: agg(il, 'soy') };
   for (const u of units) for (const k2 of Object.keys(maps)) { const o = maps[k2].get(String(u.mukey)); u[k2] = o && o.w > 0 ? o.s / o.w : null; }
+  // Illinois: Bulletin 811 by soil number replaces the survey's own PI and yields
+  for (const u of units) { const b = E.b811For(u); u.b811 = b; if (b) { u.pi = b.pi; if (b.corn != null) u.corn = b.corn; if (b.soy != null) u.soy = b.soy; } else u.pi = null; }
 }
 const prodKey = () => $('prodMetric').value;
 function prodColor(t) {        // red (low) -> yellow -> green (high)
@@ -508,7 +510,7 @@ function showProd() {
   if (!avg) return msg(`No ${P.label} ratings for these soils.` + (key === 'pi' ? ' The Illinois PI is only rated for Illinois soils.' : ''));
   const rows = E.soilRows(grid).filter(u => u[key] != null).sort((a0, b0) => b0[key] - a0[key]);
   $('prodList').innerHTML = `<div class="prod-avg"><b>${P.fmt(avg.v)}</b><span>${esc(P.long)}, acre-weighted field average${avg.share < .95 ? ` (${Math.round(avg.share * 100)}% of the field rated)` : ''}</span></div>` +
-    rows.map(u => { const c = prodColor((u[key] - P.lo) / (P.hi - P.lo)); return `<div class="soil"><i style="background:rgb(${c})"></i><div><b>${esc(P.fmt(u[key]))}</b> ${esc(u.musym)} ${esc(u.muname)}<small>${u.acres.toFixed(1)} ac (${Math.round(u.acres / grid.fieldAc * 100)}%)</small></div></div>`; }).join('');
+    rows.map(u => { const c = prodColor((u[key] - P.lo) / (P.hi - P.lo)); return `<div class="soil"><i style="background:rgb(${c})"></i><div><b>${esc(P.fmt(u[key]))}</b> ${esc(u.musym)} ${esc(u.muname)}<small>${u.acres.toFixed(1)} ac (${Math.round(u.acres / grid.fieldAc * 100)}%)${key === 'pi' && u.b811 && u.b811.f < 1 ? ` · base ${Math.round(u.pi / u.b811.f)} × ${u.b811.f.toFixed(2)} for slope/erosion` : ''}</small></div></div>`; }).join('');
 }
 function buildSoilOverlay() {
   if (!grid || !grid.soil) return;
