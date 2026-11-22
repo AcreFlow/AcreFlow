@@ -590,7 +590,8 @@ async function buildPDF(g, opts) {
 
   // page 1: summary and topo plan
   newPage();
-  text('Dirt work recommendations', MG, bold, 20, ink); y -= 2;
+  if (opts.logo) { try { const lg = await doc.embedPng(opts.logo); page.drawImage(lg, { x: PW - MG - 40, y: PH - MG - 40, width: 40, height: 40 }); page.drawText('AcreFlow', { x: PW - MG - 40 - bold.widthOfTextAtSize('AcreFlow', 11) - 8, y: PH - MG - 25, size: 11, font: bold, color: mute }); } catch (err) {} }
+  text('Dirt work recommendations', MG, bold, 20, ink, PW - MG * 2 - 120); y -= 2;
   text(`${name}  |  ${opts.date}  |  Field center ${fll(opts.center)}`, MG, font, 10, mute); y -= 10;
   for (const [k, v] of summaryLines(g, ov)) {
     page.drawText(san(k), { x: MG, y: y - 10, size: 10, font: bold, color: ink });

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#17402b"/><stop offset="1" stop-color="#0a1f2b"/></linearGradient>
+    <linearGradient id="top" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#c4e05a"/><stop offset="1" stop-color="#6aa93a"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7cc8ff"/><stop offset="1" stop-color="#1f86ea"/></linearGradient>
+    <clipPath id="tile"><path d="M256 108 L440 224 L256 340 L72 224 Z"/></clipPath>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <g id="art" transform="translate(256 262) scale(1.13) translate(-256 -262)">
+    <!-- soil faces -->
+    <path d="M72 224 L256 340 L256 400 L72 284 Z" fill="#8a5a33"/>
+    <path d="M440 224 L256 340 L256 400 L440 284 Z" fill="#623f22"/>
+    <path d="M72 250 L256 366 L440 250" fill="none" stroke="#000" stroke-opacity=".16" stroke-width="5"/>
+    <!-- field surface -->
+    <path d="M256 108 L440 224 L256 340 L72 224 Z" fill="url(#top)"/>
+    <g clip-path="url(#tile)" fill="none" stroke="#2f6b25" stroke-opacity=".55" stroke-width="7">
+      <ellipse cx="196" cy="196" rx="44" ry="27"/>
+      <ellipse cx="196" cy="196" rx="92" ry="57"/>
+      <ellipse cx="196" cy="196" rx="142" ry="88"/>
+      <ellipse cx="196" cy="196" rx="194" ry="120"/>
+      <ellipse cx="196" cy="196" rx="248" ry="154"/>
+    </g>
+    <!-- water: runs off the field and over the edge -->
+    <path d="M262 176 C318 196 236 236 300 258 C330 268 340 276 348 282" fill="none" stroke="#0b2a44" stroke-opacity=".25" stroke-width="34" stroke-linecap="round"/>
+    <path d="M262 176 C318 196 236 236 300 258 C330 268 340 276 348 282" fill="none" stroke="url(#water)" stroke-width="24" stroke-linecap="round"/>
+    <path d="M336 276 L360 290 L360 356 Q348 372 336 356 Z" fill="url(#water)"/>
+    <path d="M348 384 q-15 22 0 34 q15 -12 0 -34 Z" fill="#7cc8ff"/>
+  </g>
+</svg>

@@ -1,7 +1,7 @@
 /* AcreFlow app: map, field drawing, overlays, rain, dirt work plan, report export. */
 {
 'use strict';
-const VERSION = '4';
+const VERSION = '5';
 const $ = id => document.getElementById(id);
 const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
 const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
@@ -563,7 +563,8 @@ async function makePDF() {
   if (pdfCache) return pdfCache;
   if (!window.PDFLib) await loadScript('pdf-lib.min.js');
   const center = [field.reduce((s, p) => s + p[0], 0) / field.length, field.reduce((s, p) => s + p[1], 0) / field.length];
-  const bytes = await E.buildPDF(grid, { name: reportName(), notes: $('fnotes').value.trim(), ov, aerial: grid.img || null, center,
+  let logo = null; try { logo = new Uint8Array(await (await fetch('icon-192.png')).arrayBuffer()); } catch (e) {}
+  const bytes = await E.buildPDF(grid, { logo, name: reportName(), notes: $('fnotes').value.trim(), ov, aerial: grid.img || null, center,
     date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) });
   pdfCache = { blob: new Blob([bytes], { type: 'application/pdf' }), name: fileBase() + '.pdf' };
   return pdfCache;
