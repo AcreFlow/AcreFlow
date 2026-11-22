@@ -1,7 +1,7 @@
 /* AcreFlow app: map, field drawing, overlays, rain, dirt work plan, report export. */
 {
 'use strict';
-const VERSION = '6';
+const VERSION = '7';
 const $ = id => document.getElementById(id);
 const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
 const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
@@ -43,6 +43,7 @@ map.on('moveend', () => store.set('ftf-view', { c: map.getCenter().toArray(), z:
 
 /* ---------- state ---------- */
 let mode = 'idle', pts = [], vtxMarkers = [], field = null, grid = null, ov = {}, photo = 'none';
+let tune = Object.assign({}, E.DEFAULT_TUNE, store.get('ftf-tune') || {});
 const fc = f => ({ type: 'FeatureCollection', features: f });
 const empty = fc([]);
 const fieldSig = () => field ? field.map(p => p[0].toFixed(5) + ',' + p[1].toFixed(5)).join(';') : '';
@@ -113,8 +114,9 @@ map.on('load', () => {
   map.addLayer({ id: 'draft-fill', type: 'fill', source: 'draft', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#a4c639', 'fill-opacity': .15 } });
   map.addLayer({ id: 'draft-line', type: 'line', source: 'draft', paint: { 'line-color': '#a4c639', 'line-width': 3 } });
   const round = { 'line-cap': 'round', 'line-join': 'round' };
-  map.addLayer({ id: 'plan-case', type: 'line', source: 'plan', filter: ['in', ['get', 'kind'], ['literal', ['old', 'new', 'tile']]], layout: round, paint: { 'line-color': '#fff', 'line-width': 7, 'line-opacity': .85 } });
+  map.addLayer({ id: 'plan-case', type: 'line', source: 'plan', filter: ['in', ['get', 'kind'], ['literal', ['old', 'new', 'tile', 'trees']]], layout: round, paint: { 'line-color': '#fff', 'line-width': 7, 'line-opacity': .85 } });
   map.addLayer({ id: 'plan-old', type: 'line', source: 'plan', filter: ['==', ['get', 'kind'], 'old'], layout: round, paint: { 'line-color': '#39d353', 'line-width': 4 } });
+  map.addLayer({ id: 'plan-trees', type: 'line', source: 'plan', filter: ['==', ['get', 'kind'], 'trees'], layout: round, paint: { 'line-color': '#b08a52', 'line-width': 4 } });
   map.addLayer({ id: 'plan-new', type: 'line', source: 'plan', filter: ['==', ['get', 'kind'], 'new'], layout: round, paint: { 'line-color': '#2f7bff', 'line-width': 4 } });
   map.addLayer({ id: 'plan-tile', type: 'line', source: 'plan', filter: ['==', ['get', 'kind'], 'tile'], paint: { 'line-color': '#ff8a1e', 'line-width': 4, 'line-dasharray': [1.5, 1.2] } });
   map.addLayer({ id: 'plan-tags', type: 'symbol', source: 'plan', filter: ['has', 'icon'], layout: { 'icon-image': ['get', 'icon'], 'icon-allow-overlap': true, 'icon-ignore-placement': true } });
@@ -122,7 +124,7 @@ map.on('load', () => {
   const f = store.get('ftf-field');
   if (f && f.length >= 3) setField(f, false); else show('idle');
 });
-const PLAN_LAYERS = ['plan-case', 'plan-old', 'plan-new', 'plan-tile', 'plan-tags'];
+const PLAN_LAYERS = ['plan-case', 'plan-old', 'plan-trees', 'plan-new', 'plan-tile', 'plan-tags'];
 const vis = (id, on) => { if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none'); };
 
 /* ---------- search & locate ---------- */
@@ -273,7 +275,7 @@ async function analyze(poly) {
   for (let i = 0; i < N; i++) elev[i] = px[i * 4] * 256 + px[i * 4 + 1] + px[i * 4 + 2] / 256 - 32768;
   const cs = 40075016.686 * Math.cos((lo[1] + hi[1]) / 2 * Math.PI / 180) / worldPx(z);
   const pp = poly.map(p => [lngToX(p[0], z) - x0, latToY(p[1], z) - y0]);
-  const g = E.analyzeGrid(elev, W, H, cs, pp, (gx, gy) => [xToLng(x0 + gx, z), yToLat(y0 + gy, z)]);
+  const g = E.analyzeGrid(elev, W, H, cs, pp, (gx, gy) => [xToLng(x0 + gx, z), yToLat(y0 + gy, z)], tune);
   if (!g) { setStatus('That field is too small to analyze. Tap Edit corners to redraw it.'); return; }
   g.z = z; g.x0 = x0; g.y0 = y0; g.fieldAc = polyAcres(poly);
   g.coords = [g.toLL(0, 0), g.toLL(W, 0), g.toLL(W, H), g.toLL(0, H)];
@@ -363,8 +365,9 @@ function planFeatures() {
   const point = (llp, id, icon) => feats.push({ type: 'Feature', properties: { id, icon }, geometry: { type: 'Point', coordinates: llp } });
   for (const w of g.waterways) {
     if (ov[w.label] === 'skip') continue;
-    for (const r of E.waterwayRuns(g, w, ov[w.label])) line(r.pts, r.grass ? 'old' : 'new', w.label);
-    point(E.cellLL(g, w.mid), w.label, tagIcon(w.label, E.wwStatus(w, ov[w.label]) === 'existing' ? '#1f8f3a' : '#1658c4'));
+    for (const r of E.waterwayRuns(g, w, ov[w.label])) line(r.pts, r.kind, w.label);
+    const st = E.wwStatus(w, ov[w.label]);
+    point(E.cellLL(g, w.mid), w.label, tagIcon(w.label, st === 'existing' ? '#1f8f3a' : st === 'wooded' ? '#8a6a3b' : '#1658c4'));
   }
   for (const d of g.depressions) {
     if (ov[d.label] === 'skip') continue;
@@ -397,9 +400,9 @@ function refreshPlan() {
       sel = opt('auto', `Recommended: ${auto}`) + opt('tile', 'Tile it') + opt('fill', 'Fill it') + opt('drain', 'Surface drain') + opt('skip', 'Leave out of the report');
     } else {
       const w = a.o, st = w.check.status;
-      const auto = photo === 'loading' ? 'checking photo…' : st === 'existing' ? 'already grassed' : st === 'partial' ? 'partly grassed' : st === 'none' ? 'no waterway seen' : 'not checked';
-      cls = it && it.status === 'existing' ? 'old' : ''; line = `${Math.round(w.lenFt).toLocaleString()} ft, drains ${w.drainAc.toFixed(1)} ac`;
-      sel = opt('auto', `Photo check: ${auto}`) + opt('existing', 'Already has a waterway') + opt('needs', 'Needs a waterway') + opt('skip', 'Leave out of the report');
+      const auto = photo === 'loading' ? 'checking photo…' : st === 'existing' ? 'already grassed' : st === 'wooded' ? 'trees along it' : st === 'partial' ? 'partly grassed' : st === 'none' ? 'no waterway seen' : 'not checked';
+      cls = it && it.status === 'existing' ? 'old' : it && it.status === 'wooded' ? 'wood' : ''; line = `${Math.round(w.lenFt).toLocaleString()} ft, drains ${w.drainAc.toFixed(1)} ac`;
+      sel = opt('auto', `Photo check: ${auto}`) + opt('existing', 'Already has a waterway') + opt('wooded', 'Trees or brush: leave alone') + opt('needs', 'Needs a waterway') + opt('skip', 'Leave out of the report');
     }
     return `<div class="item" id="item-${a.id}"><div class="item-h"><span class="tag ${cls}">${a.id}</span>` +
       `<div class="item-t">${a.type === 'low' ? 'Low spot' : 'Flow path'}<small>${esc(line)}</small></div>` +
@@ -434,6 +437,22 @@ function focusItem(id) {
   const el = $('item-' + id); if (!el) return;
   requestAnimationFrame(() => { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1400); });
 }
+
+/* sensitivity sliders: how readily flow paths and low spots get flagged */
+function showTune() {
+  $('sWw').value = tune.ww; $('sLow').value = tune.low;
+  $('sWwOut').textContent = E.WW_LEVELS[tune.ww] + ' ac'; $('sLowOut').textContent = (E.LOW_LEVELS[tune.low].d * FT * 12).toFixed(0) + ' in';
+}
+function setTune() {
+  tune = { ww: +$('sWw').value, low: +$('sLow').value }; store.set('ftf-tune', tune); showTune();
+  if (!grid) return;
+  E.retune(grid, tune);
+  ov = {}; store.set('ftf-ov', { sig: fieldSig(), ov });      // item numbers change, so earlier choices no longer line up
+  refreshPlan();
+}
+$('sWw').oninput = showTune2; $('sLow').oninput = showTune2; $('sWw').onchange = setTune; $('sLow').onchange = setTune;
+function showTune2() { $('sWwOut').textContent = E.WW_LEVELS[+$('sWw').value] + ' ac'; $('sLowOut').textContent = (E.LOW_LEVELS[+$('sLow').value].d * FT * 12).toFixed(0) + ' in'; }
+showTune();
 
 /* ---------- rain: drops follow the downhill direction, drawn over the map ---------- */
 const rc = $('rain'), rx = rc.getContext('2d');

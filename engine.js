@@ -6,7 +6,10 @@ const FT = 3.28084, ACRE = 4046.856, CY = 1.30795;
 const DX = [-1, 0, 1, -1, 1, -1, 0, 1], DY = [-1, -1, -1, 0, 0, 1, 1, 1];
 const DD = [Math.SQRT2, 1, Math.SQRT2, 1, 1, Math.SQRT2, 1, Math.SQRT2];
 const POND_M = 0.05;          // water depth that counts as ponding (~2 in)
-const WATERWAY_AC = 5;        // drainage area where a flow path warrants a waterway
+const WW_LEVELS = [8, 5, 3, 2, 1];            // acres draining to a flow path before it is flagged for a waterway
+const LOW_LEVELS = [                           // ponding depth (m), area (ac) and volume (CY) before a low spot is flagged
+  { d: 0.08, a: 0.10, v: 20 }, { d: 0.05, a: 0.05, v: 10 }, { d: 0.03, a: 0.03, v: 4 }, { d: 0.02, a: 0.02, v: 2 }];
+const DEFAULT_TUNE = { ww: 3, low: 2 };
 const ELEV_RAMP = [[0, [38, 120, 170]], [.25, [70, 170, 140]], [.5, [220, 215, 90]], [.75, [230, 140, 50]], [1, [170, 50, 40]]];
 
 function rampColor(t) {
@@ -22,7 +25,7 @@ function rampColor(t) {
 
 /* E: Float32Array elevations (m), W x H grid; cs: cell size (m); poly: field corners in grid coords;
    toLL(gx, gy) -> [lng, lat] for a grid position. */
-function analyzeGrid(E, W, H, cs, poly, toLL) {
+function analyzeGrid(E, W, H, cs, poly, toLL, tune) {
   const N = W * H;
   // smooth twice (3x3) to soften resampling steps in the source data
   let S = E;
@@ -110,10 +113,7 @@ function analyzeGrid(E, W, H, cs, poly, toLL) {
   const g = { W, H, cs, S, F, D, DK, A, P, M, GX, GY, cells, poly, toLL, cellAc, mn, mx, mean: sum / cells.length,
     slopePct: slopeSum / cells.length * 100, pondAc: pond * cellAc, fieldAc: cells.length * cellAc,
     outlet, outletAc: outA * cellAc };
-  g.depressions = findDepressions(g);
-  g.waterways = findWaterways(g, WATERWAY_AC);
-  g.depressions.forEach(d => { d.tile = designTile(g, d); });
-  checkWaterways(g, null);
+  retune(g, tune);
   return g;
 }
 
@@ -122,10 +122,20 @@ const ll = (g, i) => { const p = cxy(g, i); return g.toLL(p[0], p[1]); };
 
 function stepLen(g, c) { return (g.DK[c] >= 0 ? DD[g.DK[c]] : 1) * g.cs; }
 
-function findDepressions(g) {
+// (re)build low spots and flow paths at a given sensitivity; keeps any aerial photo already loaded
+function retune(g, tune) {
+  const t = Object.assign({}, DEFAULT_TUNE, tune || {});
+  g.tune = { ww: Math.max(0, Math.min(WW_LEVELS.length - 1, t.ww | 0)), low: Math.max(0, Math.min(LOW_LEVELS.length - 1, t.low | 0)) };
+  g.depressions = findDepressions(g, LOW_LEVELS[g.tune.low]);
+  g.waterways = findWaterways(g, WW_LEVELS[g.tune.ww]);
+  g.depressions.forEach(d => { d.tile = designTile(g, d); });
+  checkWaterways(g, g.img || null);
+}
+
+function findDepressions(g, lv) {
   const { W, H, M, P, D, S, cs } = g, lab = new Int32Array(W * H).fill(-1), out = [];
   for (const start of g.cells) {
-    if (P[start] <= POND_M || lab[start] >= 0) continue;
+    if (P[start] <= lv.d || lab[start] >= 0) continue;
     const id = out.length, stack = [start]; lab[start] = id;
     let n = 0, vol = 0, maxP = 0, pit = start, sx = 0, sy = 0;
     const members = [];
@@ -135,7 +145,7 @@ function findDepressions(g) {
       const x = c % W, y = (c - x) / W; sx += x; sy += y;
       for (let k = 0; k < 8; k++) {
         const xx = x + DX[k], yy = y + DY[k]; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
-        const m = yy * W + xx; if (M[m] && lab[m] < 0 && P[m] > POND_M) { lab[m] = id; stack.push(m); }
+        const m = yy * W + xx; if (M[m] && lab[m] < 0 && P[m] > lv.d) { lab[m] = id; stack.push(m); }
       }
     }
     // surface-drain route: follow the flow path out of the low spot until the water would run free
@@ -144,7 +154,7 @@ function findDepressions(g) {
     out.push({ id, n, members, areaAc: n * g.cellAc, volCY: vol * cs * cs * CY, maxFt: maxP * FT,
       pit, pitLL: ll(g, pit), wsAc: g.A[prev] * g.cellAc, exit: c, exitLL: ll(g, c), drainFt: len * FT, spillElevFt: (S[pit] + maxP) * FT });
   }
-  const kept = out.filter(d => d.areaAc >= 0.05 && d.volCY >= 10).sort((a, b) => b.volCY - a.volCY).slice(0, 15);
+  const kept = out.filter(d => d.areaAc >= lv.a && d.volCY >= lv.v).sort((a, b) => b.volCY - a.volCY).slice(0, 25);
   kept.forEach((d, k) => d.label = 'D' + (k + 1));
   return kept;
 }
@@ -179,7 +189,7 @@ function findWaterways(g, thrAc) {
   for (const [r, list] of sys) {
     const main = segs[r], exit = main.exit;
     const lenFt = list.reduce((t, s) => t + s.len, 0) * FT;
-    if (lenFt < 150) continue;
+    if (lenFt < 120) continue;
     const drop = S[main.head] - S[exit];
     out.push({ segs: list, lenFt, mainFt: main.len * FT, drainAc: A[exit] * g.cellAc,
       slopePct: main.len > 0 ? Math.max(0, drop / main.len * 100) : 0, exit, exitLL: ll(g, exit),
@@ -237,13 +247,20 @@ function checkWaterways(g, img) {
   const dist = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
   const spread = (arr, a, b, m) => { let n = 0, s = 0; for (let j = a; j <= b; j++) if (arr[j]) { n++; s += dist(arr[j], m); } return n ? s / n : 0; };
   const lum = c => (c[0] + c[1] + c[2]) / 3, exg = c => 2 * c[1] - c[0] - c[2];
+  // roughness: spread of raw pixel brightness in a small window (tree canopy is rough; grass and wet soil are smooth)
+  const rough = (gx, gy) => {
+    const px = Math.round(gx * k), py = Math.round(gy * k); if (px < 3 || py < 3 || px >= iw - 3 || py >= ih - 3) return null;
+    let s = 0, s2 = 0;
+    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) { const o = ((py + dy) * iw + px + dx) * 4, l = (data[o] + data[o + 1] + data[o + 2]) / 3; s += l; s2 += l * l; }
+    return Math.sqrt(Math.max(0, s2 / 49 - (s / 49) * (s / 49)));
+  };
   const stride = Math.max(1, Math.round(8 / cs)), h = Math.max(2, Math.round(15 / cs));
 
   for (const w of g.waterways) {
-    let total = 0, checked = 0, grass = 0;
+    let total = 0, checked = 0, grass = 0, wood = 0;
     for (const s of w.segs) {
       const n = s.pts.length, flags = [];
-      s.grass = new Uint8Array(n);                     // 0 = not checked, 1 = no strip, 2 = grassed strip
+      s.grass = new Uint8Array(n);                     // 0 = not checked, 1 = bare, 2 = grassed strip, 3 = trees
       for (let i = 0; i < n; i += stride) {
         const a = cxy(g, s.pts[Math.max(0, i - h)]), b = cxy(g, s.pts[Math.min(n - 1, i + h)]), c = cxy(g, s.pts[i]);
         const tx = b[0] - a[0], ty = b[1] - a[1], L = Math.hypot(tx, ty) || 1, nx = -ty / L, ny = tx / L;
@@ -263,41 +280,48 @@ function checkWaterways(g, img) {
           const noise = ((FL ? spread(tr, jc - 22, jc - 9, FL) : 0) + (FR ? spread(tr, jc + 9, jc + 22, FR) : 0)) / ((FL ? 1 : 0) + (FR ? 1 : 0));
           const F = FL && FR ? [(FL[0] + FR[0]) / 2, (FL[1] + FR[1]) / 2, (FL[2] + FR[2]) / 2] : (FL || FR);
           const distinct = best.con > Math.max(16, 2.5 * noise);
-          const wetStreak = lum(C) < lum(F) - 8 && exg(C) < exg(F) + 6;   // darker but no greener = wet soil, not grass
-          flag = distinct && !wetStreak ? 2 : 1;
+          const darker = lum(C) < lum(F) - 8;
+          const tc = (jc - 32) * 2 / cs, at = t => rough(c[0] + nx * t, c[1] + ny * t);
+          const rc = at(tc), rl = FL ? at(tc - 30 / cs) : null, rr = FR ? at(tc + 30 / cs) : null;
+          const rf = rl != null && rr != null ? (rl + rr) / 2 : rl != null ? rl : rr;
+          const trees = distinct && darker && rc != null && rf != null && rc > Math.max(11, 1.6 * rf);   // dark and rough = tree canopy
+          const wetStreak = darker && exg(C) < exg(F) + 6;                                                // dark, smooth, no greener = wet soil
+          flag = trees ? 3 : distinct && !wetStreak ? 2 : 1;
         }
         flags.push(flag);
       }
       const per = s.len / Math.max(1, flags.length);
       flags.forEach((f, idx) => {
         let sm = f;
-        if (f) { let two = 0, one = 0; for (let q = idx - 2; q <= idx + 2; q++) { if (flags[q] === 2) two++; else if (flags[q] === 1) one++; } sm = two > one ? 2 : two < one ? 1 : f; }
+        if (f) { const n3 = [0, 0, 0, 0]; for (let q = idx - 2; q <= idx + 2; q++) if (flags[q]) n3[flags[q]]++; const mx = Math.max(n3[1], n3[2], n3[3]); sm = n3[f] === mx ? f : n3.indexOf(mx, 1); }
         for (let ii = idx * stride; ii < Math.min(n, (idx + 1) * stride); ii++) s.grass[ii] = sm;
-        total += per; if (sm) checked += per; if (sm === 2) grass += per;
+        total += per; if (sm) checked += per; if (sm === 2) grass += per; if (sm === 3) wood += per;
       });
     }
     if (total <= 0 || checked / total < 0.4) { w.check = { status: 'unchecked' }; continue; }
-    const cover = grass / checked;
-    w.check = { status: cover >= 0.7 ? 'existing' : cover >= 0.3 ? 'partial' : 'none', cover, grassFt: w.lenFt * cover, bareFt: w.lenFt * (1 - cover) };
+    const cover = (grass + wood) / checked, treeShare = wood / checked;       // cover = share that needs no waterway work
+    w.check = { status: treeShare >= 0.7 ? 'wooded' : cover >= 0.7 ? 'existing' : cover >= 0.3 ? 'partial' : 'none', cover, treeShare,
+      grassFt: w.lenFt * grass / checked, treeFt: w.lenFt * treeShare, bareFt: w.lenFt * (1 - cover) };
   }
 }
 
-/* owner overrides: waterways 'existing' | 'needs' | 'skip'; low spots 'tile' | 'fill' | 'drain' | 'skip' */
-function wwStatus(w, o) { return o === 'existing' ? 'existing' : o === 'needs' ? 'none' : (w.check ? w.check.status : 'unchecked'); }
+/* owner overrides: waterways 'existing' | 'wooded' | 'needs' | 'skip'; low spots 'tile' | 'fill' | 'drain' | 'skip' */
+function wwStatus(w, o) { return o === 'existing' || o === 'wooded' ? o : o === 'needs' ? 'none' : (w.check ? w.check.status : 'unchecked'); }
+const noWork = st => st === 'existing' || st === 'wooded';
 function lowMethod(d, o) {
   if (o === 'tile' || o === 'fill' || o === 'drain') return o;
-  if (d.maxFt < 0.5 && d.volCY < 400) return 'fill';
-  if (d.drainFt <= 150 && d.maxFt <= 1) return 'drain';
+  if (d.maxFt < 0.3 && d.volCY < 150) return 'fill';
+  if (d.drainFt <= 100 && d.maxFt <= 0.5) return 'drain';
   return 'tile';
 }
-// split a waterway into grassed / not-grassed runs of cells for drawing
+// split a waterway into runs of cells for drawing: kind 'old' (grassed), 'trees' or 'new' (needs work)
 function waterwayRuns(g, w, o) {
-  const force = o === 'existing' ? 2 : o === 'needs' ? 1 : 0, runs = [];
+  const force = o === 'existing' ? 'old' : o === 'wooded' ? 'trees' : o === 'needs' ? 'new' : null, runs = [];
   for (const s of w.segs) {
     let cur = null;
     for (let i = 0; i < s.pts.length; i++) {
-      const gr = force ? force === 2 : !!(s.grass && s.grass[i] === 2);
-      if (!cur || cur.grass !== gr) { if (cur) cur.pts.push(s.pts[i]); cur = { grass: gr, pts: [s.pts[i]] }; runs.push(cur); }
+      const f = s.grass ? s.grass[i] : 0, kind = force || (f === 2 ? 'old' : f === 3 ? 'trees' : 'new');
+      if (!cur || cur.kind !== kind) { if (cur) cur.pts.push(s.pts[i]); cur = { kind, pts: [s.pts[i]] }; runs.push(cur); }
       else cur.pts.push(s.pts[i]);
     }
   }
@@ -396,7 +420,7 @@ function drawPlan(g, maxW, maxH, opt) {
   const runs = [];
   for (const w of g.waterways) if (ov[w.label] !== 'skip') runs.push(...waterwayRuns(g, w, ov[w.label]));
   for (const r of runs) { trace(r.pts); ctx.strokeStyle = '#fff'; ctx.lineWidth = 9 * U; ctx.stroke(); }
-  for (const r of runs) { trace(r.pts); ctx.strokeStyle = r.grass ? '#1f8f3a' : '#1658c4'; ctx.lineWidth = 5 * U; ctx.stroke(); }
+  for (const r of runs) { trace(r.pts); ctx.strokeStyle = r.kind === 'old' ? '#1f8f3a' : r.kind === 'trees' ? '#8a6a3b' : '#1658c4'; ctx.lineWidth = 5 * U; ctx.stroke(); }
   // tile routes
   for (const d of g.depressions) {
     if (ov[d.label] === 'skip' || lowMethod(d, ov[d.label]) !== 'tile' || d.tile.pts.length < 2) continue;
@@ -421,7 +445,7 @@ function drawPlan(g, maxW, maxH, opt) {
     if (ov[w.label] === 'skip') continue;
     const p = cxy(g, w.exit), q = toPx(p[0], p[1]);
     ctx.fillStyle = '#c0392b'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 * U; ctx.beginPath(); ctx.arc(q[0], q[1], 8 * U, 0, 7); ctx.fill(); ctx.stroke();
-    tag(w.label, w.mid, wwStatus(w, ov[w.label]) === 'existing' ? '#1f8f3a' : '#1658c4');
+    const st = wwStatus(w, ov[w.label]); tag(w.label, w.mid, st === 'existing' ? '#1f8f3a' : st === 'wooded' ? '#8a6a3b' : '#1658c4');
   }
   for (const d of g.depressions) if (ov[d.label] !== 'skip') tag(d.label, d.pit, '#0a3d8f');
 
@@ -489,26 +513,31 @@ function workItems(g, ov) {
   }
   for (const w of g.waterways) {
     if (ov[w.label] === 'skip') continue;
-    const st = wwStatus(w, ov[w.label]), owner = ov[w.label] === 'existing' || ov[w.label] === 'needs', c = w.check || {};
+    const st = wwStatus(w, ov[w.label]), owner = ['existing', 'needs', 'wooded'].includes(ov[w.label]), c = w.check || {};
     const pct = c.cover != null ? Math.round(c.cover * 100) : null;
-    const build = `shape a broad, parabolic channel along this path, seed it and protect it until the stand establishes (NRCS Practice 412). Size the width and depth for the ${f1(w.drainAc)}-acre drainage area with the contractor or the county SWCD/NRCS office.`;
+    const build = `shape a broad, parabolic channel along this path, seed it and protect it until the stand establishes (NRCS Practice 412). Size the width and depth for the ${f1(w.drainAc)}-acre drainage area with the contractor or the county SWCD/NRCS office. Where the bottom stays wet, add a tile line along one side, offset from the center, so the waterway can be established and mowed.`;
+    const treeNote = c.treeFt > 60 && !owner ? ` About ${f0(c.treeFt)} ft of this path runs through trees (brown on the map) and is left alone.` : '';
     const steep = w.slopePct >= 2 ? ' At 2% or more slope this path has a higher gully risk; treat it as a priority.' : '';
     let recTitle, rec, short;
-    if (st === 'existing') {
+    if (st === 'wooded') {
+      recTitle = 'Wooded draw: no waterway recommended';
+      rec = (owner ? 'The owner reports trees or brush along this path.' : `The aerial photo shows trees along about ${Math.round(c.treeShare * 100)}% of this path.`) + ' No waterway is recommended here. It is shown for reference only.';
+      short = owner ? 'Trees or brush (set by you). No work.' : 'Trees along this path. No work.';
+    } else if (st === 'existing') {
       recTitle = 'Already grassed: no work recommended';
       rec = (owner ? 'The owner reports a grassed waterway is already in place on this path.' : `The aerial photo shows a grassed waterway along about ${pct}% of this path.`) + ' It is shown for reference only and is not part of the recommended work.';
       short = owner ? 'Already has a waterway (set by you). No work.' : `Already grassed (photo: ${pct}%). No work.`;
     } else if (st === 'partial') {
       recTitle = 'Extend or repair the existing waterway';
-      rec = `The aerial photo shows a grassed strip along about ${pct}% of this path (roughly ${f0(c.grassFt)} ft, green on the map). About ${f0(c.bareFt)} ft shows no grass (blue on the map). On the bare stretches, ` + build + steep;
+      rec = `The aerial photo shows a grassed strip along about ${pct}% of this path (roughly ${f0(c.grassFt)} ft, green on the map). About ${f0(c.bareFt)} ft shows no grass (blue on the map). On the bare stretches, ` + build + steep + treeNote;
       short = `Partly grassed (${pct}%): extend about ${f0(c.bareFt)} ft`;
     } else {
       recTitle = 'Build a grassed waterway';
       rec = (st === 'unchecked' ? 'The aerial photo could not be checked for this path, so confirm in the field that no waterway exists. ' : owner ? '' : 'No grassed strip shows on the aerial photo along this path. ') +
-        build.charAt(0).toUpperCase() + build.slice(1) + steep + ' Check the outlet where it leaves the field for erosion and keep it stable.';
-      short = st === 'unchecked' ? 'Needs waterway (photo not checked)' : 'Needs waterway: ' + f0(w.lenFt) + ' ft';
+        build.charAt(0).toUpperCase() + build.slice(1) + steep + ' Check the outlet where it leaves the field for erosion and keep it stable.' + treeNote;
+      short = st === 'unchecked' ? 'Needs waterway (photo not checked)' : 'Needs waterway: ' + f0(c.bareFt != null && !owner ? c.bareFt : w.lenFt) + ' ft';
     }
-    items.push({ id: w.label, type: 'ww', kind: st === 'existing' ? 'Existing grassed waterway' : 'Concentrated flow path', status: st, existing: st === 'existing', where: 'Leaves field at ' + fll(w.exitLL),
+    items.push({ id: w.label, type: 'ww', kind: st === 'existing' ? 'Existing grassed waterway' : st === 'wooded' ? 'Wooded draw' : 'Concentrated flow path', status: st, existing: noWork(st), where: 'Leaves field at ' + fll(w.exitLL),
       size: `${f0(w.lenFt)} ft in field, drains ${f1(w.drainAc)} ac, ${f1(w.slopePct)}% average slope`,
       recTitle, rec, more: [], short, line: `${f0(w.lenFt)} ft, drains ${f1(w.drainAc)} ac` });
   }
@@ -524,10 +553,10 @@ function summaryLines(g, ov) {
   if (tiled.length) parts.push(`${tiled.length} to tile (about ${f0(tiled.reduce((t, i) => t + dep(i.id).tile.lenFt, 0))} ft of main)`);
   if (filled.length) parts.push(`${filled.length} to fill (about ${f0(filled.reduce((t, i) => t + dep(i.id).volCY, 0))} CY)`);
   if (drained.length) parts.push(`${drained.length} to surface drain`);
-  const exist = wws.filter(i => i.status === 'existing'), need = wws.filter(i => i.status !== 'existing');
-  const needFt = need.reduce((t, i) => { const w = way(i.id); return t + (i.status === 'partial' ? w.check.bareFt : w.lenFt); }, 0);
+  const exist = wws.filter(i => i.existing), need = wws.filter(i => !i.existing);
+  const needFt = need.reduce((t, i) => { const w = way(i.id); return t + (w.check && w.check.bareFt != null && !ov[i.id] ? w.check.bareFt : w.lenFt); }, 0);
   const wp = [];
-  if (exist.length) wp.push(`${exist.length} already grassed (no work)`);
+  if (exist.length) wp.push(`${exist.length} already grassed or wooded (no work)`);
   if (need.length) wp.push(`${need.length} to build or extend (about ${f0(needFt)} ft)`);
   return [
     ['Field size', f1(g.fieldAc) + ' acres'],
@@ -585,7 +614,7 @@ async function buildPDF(g, opts) {
     page.drawRectangle({ x, y: y - ih, width: iw, height: ih, borderColor: mute, borderWidth: .5 });
     y -= ih + 10;
   };
-  const key = 'Green lines = existing grassed waterway. Blue lines = waterway to build or extend. Orange dashes = tile route from a low spot to its outlet (orange square). Dark blue = ponding low spots (D#). Red dots = where flow paths (W#) leave the field.';
+  const key = 'Green lines = existing grassed waterway. Brown lines = trees along the flow path, left alone. Blue lines = waterway to build or extend. Orange dashes = tile route from a low spot to its outlet (orange square). Dark blue = ponding low spots (D#). Red dots = where flow paths (W#) leave the field.';
 
   // page 1: summary and topo plan
   newPage();
@@ -618,7 +647,7 @@ async function buildPDF(g, opts) {
   if (!items.length) text('No low spots or flow paths needing dirt work were found at this data resolution.', MG, font, 10.5);
   for (const it of items) {
     if (y < MG + 130) newPage();
-    page.drawRectangle({ x: MG, y: y - 18, width: 34, height: 18, color: it.type === 'low' ? colors.low : it.status === 'existing' ? colors.existing : colors.ww });
+    page.drawRectangle({ x: MG, y: y - 18, width: 34, height: 18, color: it.type === 'low' ? colors.low : colors.ww });
     page.drawText(it.id, { x: MG + 6, y: y - 13.5, size: 11, font: bold, color: rgb(1, 1, 1) });
     page.drawText(san(it.kind), { x: MG + 44, y: y - 13.5, size: 11.5, font: bold, color: ink });
     y -= 24;
@@ -633,7 +662,7 @@ async function buildPDF(g, opts) {
   if (inPlace.length) {
     if (y < MG + 90) newPage();
     text('Already in place: no work recommended', MG, bold, 12); y -= 2;
-    for (const it of inPlace) { labeled(it.id + ':', `Existing grassed waterway, ${it.size}. ${it.where}. Shown in green on the maps for reference.`, MG, 9.5); y -= 2; }
+    for (const it of inPlace) { labeled(it.id + ':', `${it.kind}, ${it.size}. ${it.where}. Shown ${it.status === 'wooded' ? 'in brown' : 'in green'} on the maps for reference.`, MG, 9.5); y -= 2; }
     y -= 8;
   }
   if (opts.notes) { if (y < MG + 80) newPage(); text('Owner notes', MG, bold, 12); y -= 2; text(opts.notes, MG, font, 10); y -= 8; }
@@ -666,8 +695,8 @@ function buildKML(g, name, ov) {
   for (const w of g.waterways) {
     const it = byId[w.label]; if (!it) continue;
     const runs = waterwayRuns(g, w, ov[w.label]);
-    for (const [grass, label, style] of [[true, 'existing grassed waterway (no work)', '#wwold'], [false, 'waterway to build', '#wwnew']]) {
-      const rs = runs.filter(r => r.grass === grass); if (!rs.length) continue;
+    for (const [kind, label, style] of [['old', 'existing grassed waterway (no work)', '#wwold'], ['trees', 'trees along flow path (no work)', '#wwtree'], ['new', 'waterway to build', '#wwnew']]) {
+      const rs = runs.filter(r => r.kind === kind); if (!rs.length) continue;
       pm += `<Placemark><name>${w.label} ${label}</name><description>${esc(it.size + '. ' + it.rec)}</description><styleUrl>${style}</styleUrl><MultiGeometry>${rs.map(r => line(r.pts)).join('')}</MultiGeometry></Placemark>\n`;
     }
   }
@@ -675,11 +704,12 @@ function buildKML(g, name, ov) {
 <Style id="field"><LineStyle><color>ffffffff</color><width>3</width></LineStyle><PolyStyle><fill>0</fill></PolyStyle></Style>
 <Style id="pond"><IconStyle><color>ffff8c1e</color><scale>1.2</scale></IconStyle></Style>
 <Style id="wwnew"><LineStyle><color>ffc45816</color><width>5</width></LineStyle></Style>
+<Style id="wwtree"><LineStyle><color>ff3b6a8a</color><width>5</width></LineStyle></Style>
 <Style id="wwold"><LineStyle><color>ff3a8f1f</color><width>5</width></LineStyle></Style>
 <Style id="tile"><LineStyle><color>ff006ae0</color><width>4</width></LineStyle></Style>
 ${pm}</Document></kml>`;
 }
 
-global.FieldEngine = { analyzeGrid, checkWaterways, wwStatus, lowMethod, waterwayRuns, chaikin, cellLL: ll, drawPlan, buildPDF, buildKML,
+global.FieldEngine = { analyzeGrid, retune, WW_LEVELS, LOW_LEVELS, DEFAULT_TUNE, checkWaterways, wwStatus, lowMethod, waterwayRuns, chaikin, cellLL: ll, drawPlan, buildPDF, buildKML,
   workItems, summaryLines, rampColor, ELEV_RAMP, FT, ACRE, POND_M };
 })(window);

@@ -77,7 +77,7 @@ h2{font:700 15px/1.2 system-ui,-apple-system,sans-serif;margin:16px 0 6px}
 .sw:checked::after{transform:translateX(20px)}
 .sw:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 input[type=range]{width:100%;accent-color:var(--green);height:32px;margin:0}
-.slider{display:grid;grid-template-columns:4.4em minmax(0,1fr) 3em;gap:10px;align-items:center;font-size:14px;color:var(--mute);padding-bottom:6px}
+.slider{display:grid;grid-template-columns:5.2em minmax(0,1fr) 3em;gap:10px;align-items:center;font-size:14px;color:var(--mute);padding-bottom:6px}
 .slider output{text-align:right;color:var(--ink);font-variant-numeric:tabular-nums}
 .legend{height:10px;border-radius:5px;margin:6px 0 2px}
 .legend-l{display:flex;justify-content:space-between;color:var(--mute);font-size:13px;padding-bottom:6px}
@@ -90,7 +90,7 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
 .item.flash{border-color:var(--rain);background:rgba(79,179,255,.12)}
 .item-h{display:flex;gap:8px;align-items:center}
 .tag{flex:none;min-width:36px;text-align:center;padding:3px 6px;border-radius:7px;font-weight:700;font-size:13px;color:#fff;background:#1658c4}
-.tag.low{background:#0a3d8f}.tag.old{background:#1f8f3a}
+.tag.low{background:#0a3d8f}.tag.old{background:#1f8f3a}.tag.wood{background:#8a6a3b}
 .item-t{flex:1;font-weight:600;line-height:1.25}
 .item-t small{display:block;font-weight:400;color:var(--mute);font-size:13px}
 .item-r{margin:8px 0;font-size:14px}
@@ -174,8 +174,13 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
 
         <div id="vWork" class="hide">
           <p class="hint" id="itemsHint" style="margin-top:10px"></p>
-          <div class="key"><span><i style="background:#39d353"></i>Existing waterway</span><span><i style="background:#2f7bff"></i>Waterway needed</span><span><i style="background:var(--tile)"></i>Tile route</span></div>
+          <div class="key"><span><i style="background:#39d353"></i>Existing waterway</span><span><i style="background:#2f7bff"></i>Waterway needed</span><span><i style="background:var(--tile)"></i>Tile route</span><span><i style="background:#b08a52"></i>Trees: left alone</span></div>
           <div id="items"></div>
+          <h2>How much to flag</h2>
+          <div class="slider"><span>Waterways</span><input type="range" id="sWw" min="0" max="4" step="1" value="3" aria-label="Waterway sensitivity"><output id="sWwOut"></output></div>
+          <p class="hint" style="font-size:13px;margin:-4px 0 8px">Flags a flow path once this many acres drain to it. Slide right for more waterways.</p>
+          <div class="slider"><span>Low spots</span><input type="range" id="sLow" min="0" max="3" step="1" value="2" aria-label="Low spot sensitivity"><output id="sLowOut"></output></div>
+          <p class="hint" style="font-size:13px;margin:-4px 0 0">Flags a low spot once water would stand this deep. Slide right for more low spots and tile. Changing either resets your choices above.</p>
           <h2>Report for the contractor</h2>
           <input class="field-in" id="fname" type="text" placeholder="Field name" maxlength="60" autocomplete="off">
           <textarea class="field-in" id="fnotes" placeholder="Notes (optional): access, known tile, timing…" maxlength="600"></textarea>
@@ -193,7 +198,7 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
 </div>
 
 <script src="vendor/maplibre-gl.js"></script>
-<script src="engine.js?v=6"></script>
-<script src="app.js?v=6"></script>
+<script src="engine.js?v=7"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>
