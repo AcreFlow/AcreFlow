@@ -495,10 +495,9 @@ function workItems(g, ov) {
     const steep = w.slopePct >= 2 ? ' At 2% or more slope this path has a higher gully risk; treat it as a priority.' : '';
     let recTitle, rec, short;
     if (st === 'existing') {
-      recTitle = 'Existing grassed waterway: no new construction';
-      rec = (owner ? 'The owner reports a grassed waterway is already in place on this path. ' : `The aerial photo shows a grassed strip along about ${pct}% of this path. `) +
-        'Inspect it for gullies, sediment bars and crop rows crowding the edges. Reshape and reseed only where it has failed, and keep the outlet stable where it leaves the field.';
-      short = owner ? 'Existing waterway (marked by you)' : `Existing waterway (photo: ${pct}% grassed)`;
+      recTitle = 'Already grassed: no work recommended';
+      rec = (owner ? 'The owner reports a grassed waterway is already in place on this path.' : `The aerial photo shows a grassed waterway along about ${pct}% of this path.`) + ' It is shown for reference only and is not part of the recommended work.';
+      short = owner ? 'Already has a waterway (set by you). No work.' : `Already grassed (photo: ${pct}%). No work.`;
     } else if (st === 'partial') {
       recTitle = 'Extend or repair the existing waterway';
       rec = `The aerial photo shows a grassed strip along about ${pct}% of this path (roughly ${f0(c.grassFt)} ft, green on the map). About ${f0(c.bareFt)} ft shows no grass (blue on the map). On the bare stretches, ` + build + steep;
@@ -509,7 +508,7 @@ function workItems(g, ov) {
         build.charAt(0).toUpperCase() + build.slice(1) + steep + ' Check the outlet where it leaves the field for erosion and keep it stable.';
       short = st === 'unchecked' ? 'Needs waterway (photo not checked)' : 'Needs waterway: ' + f0(w.lenFt) + ' ft';
     }
-    items.push({ id: w.label, type: 'ww', kind: 'Concentrated flow path', status: st, where: 'Leaves field at ' + fll(w.exitLL),
+    items.push({ id: w.label, type: 'ww', kind: st === 'existing' ? 'Existing grassed waterway' : 'Concentrated flow path', status: st, existing: st === 'existing', where: 'Leaves field at ' + fll(w.exitLL),
       size: `${f0(w.lenFt)} ft in field, drains ${f1(w.drainAc)} ac, ${f1(w.slopePct)}% average slope`,
       recTitle, rec, more: [], short, line: `${f0(w.lenFt)} ft, drains ${f1(w.drainAc)} ac` });
   }
@@ -528,7 +527,7 @@ function summaryLines(g, ov) {
   const exist = wws.filter(i => i.status === 'existing'), need = wws.filter(i => i.status !== 'existing');
   const needFt = need.reduce((t, i) => { const w = way(i.id); return t + (i.status === 'partial' ? w.check.bareFt : w.lenFt); }, 0);
   const wp = [];
-  if (exist.length) wp.push(`${exist.length} already grassed`);
+  if (exist.length) wp.push(`${exist.length} already grassed (no work)`);
   if (need.length) wp.push(`${need.length} to build or extend (about ${f0(needFt)} ft)`);
   return [
     ['Field size', f1(g.fieldAc) + ' acres'],
@@ -615,8 +614,8 @@ async function buildPDF(g, opts) {
   // work items
   newPage();
   text('Recommended work', MG, bold, 16, ink); y -= 4;
-  const items = workItems(g, ov);
-  if (!items.length) text('No low spots or concentrated flow paths large enough to recommend dirt work were found at this data resolution.', MG, font, 10.5);
+  const allItems = workItems(g, ov), items = allItems.filter(i => !i.existing), inPlace = allItems.filter(i => i.existing);
+  if (!items.length) text('No low spots or flow paths needing dirt work were found at this data resolution.', MG, font, 10.5);
   for (const it of items) {
     if (y < MG + 130) newPage();
     page.drawRectangle({ x: MG, y: y - 18, width: 34, height: 18, color: it.type === 'low' ? colors.low : it.status === 'existing' ? colors.existing : colors.ww });
@@ -630,6 +629,12 @@ async function buildPDF(g, opts) {
     text(it.rec, MG + 44, font, 10, ink);
     for (const [label, body] of it.more) { y -= 3; labeled(label + ':', body, MG + 44, 9.5); }
     y -= 12;
+  }
+  if (inPlace.length) {
+    if (y < MG + 90) newPage();
+    text('Already in place: no work recommended', MG, bold, 12); y -= 2;
+    for (const it of inPlace) { labeled(it.id + ':', `Existing grassed waterway, ${it.size}. ${it.where}. Shown in green on the maps for reference.`, MG, 9.5); y -= 2; }
+    y -= 8;
   }
   if (opts.notes) { if (y < MG + 80) newPage(); text('Owner notes', MG, bold, 12); y -= 2; text(opts.notes, MG, font, 10); y -= 8; }
   if (y < MG + 200) newPage();
@@ -661,7 +666,7 @@ function buildKML(g, name, ov) {
   for (const w of g.waterways) {
     const it = byId[w.label]; if (!it) continue;
     const runs = waterwayRuns(g, w, ov[w.label]);
-    for (const [grass, label, style] of [[true, 'existing grassed waterway', '#wwold'], [false, 'waterway to build', '#wwnew']]) {
+    for (const [grass, label, style] of [[true, 'existing grassed waterway (no work)', '#wwold'], [false, 'waterway to build', '#wwnew']]) {
       const rs = runs.filter(r => r.grass === grass); if (!rs.length) continue;
       pm += `<Placemark><name>${w.label} ${label}</name><description>${esc(it.size + '. ' + it.rec)}</description><styleUrl>${style}</styleUrl><MultiGeometry>${rs.map(r => line(r.pts)).join('')}</MultiGeometry></Placemark>\n`;
     }

@@ -1,7 +1,7 @@
 /* AcreFlow app: map, field drawing, overlays, rain, dirt work plan, report export. */
 {
 'use strict';
-const VERSION = '5';
+const VERSION = '6';
 const $ = id => document.getElementById(id);
 const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
 const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
@@ -381,12 +381,13 @@ function refreshPlan() {
   map.getSource('plan').setData(fc(planFeatures()));
   const items = E.workItems(g, ov), byId = Object.fromEntries(items.map(i => [i.id, i]));
   const all = [...g.depressions.map(d => ({ id: d.label, type: 'low', o: d })), ...g.waterways.map(w => ({ id: w.label, type: 'ww', o: w }))];
-  $('tabWork').textContent = items.length ? `Dirt work (${items.length})` : 'Dirt work';
+  const todo = items.filter(i => !i.existing).length;
+  $('tabWork').textContent = todo ? `Dirt work (${todo})` : 'Dirt work';
   $('itemsHint').textContent = !all.length ? 'No low spots or flow paths big enough to need dirt work showed up at this data resolution.'
     : photo === 'loading' ? 'Checking the aerial photo for waterways that are already grassed…'
     : photo === 'failed' ? 'The aerial photo did not load, so existing waterways could not be checked. Set each one yourself below.'
     : 'Tap Map on an item to see it. Change the choice if you know the ground better than the data does.';
-  $('items').innerHTML = all.map(a => {
+  const isDone = x => !!(byId[x.id] && byId[x.id].existing), card = a => {
     const it = byId[a.id], cur = ov[a.id] || 'auto';
     const opt = (v, t) => `<option value="${v}"${cur === v ? ' selected' : ''}>${esc(t)}</option>`;
     let sel, cls, line;
@@ -405,7 +406,10 @@ function refreshPlan() {
       `<button class="btn sm" data-go="${a.id}">Map</button></div>` +
       `<div class="item-r">${it ? esc(it.short) : 'Left out of the report'}</div>` +
       `<select data-ov="${a.id}" aria-label="Choice for ${a.id}">${sel}</select></div>`;
-  }).join('');
+  };
+  const work = all.filter(x => !isDone(x)), done = all.filter(isDone);
+  $('items').innerHTML = (all.length && !work.length ? '<p class="hint">Nothing here needs dirt work.</p>' : work.map(card).join('')) +
+    (done.length ? '<h2>Already in place: no work needed</h2>' + done.map(card).join('') : '');
 }
 $('items').addEventListener('change', e => {
   const id = e.target.dataset.ov; if (!id) return;
