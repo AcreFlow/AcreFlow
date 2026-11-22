@@ -10,6 +10,8 @@ const WW_LEVELS = [8, 5, 3, 2, 1];            // acres draining to a flow path b
 const LOW_LEVELS = [                           // ponding depth (m), area (ac) and volume (CY) before a low spot is flagged
   { d: 0.08, a: 0.10, v: 20 }, { d: 0.05, a: 0.05, v: 10 }, { d: 0.03, a: 0.03, v: 4 }, { d: 0.02, a: 0.02, v: 2 }];
 const DEFAULT_TUNE = { ww: 3, low: 2 };
+const KICK_OUT = 0.2;                         // share of a flow path showing grass or trees that drops it from the recommendations
+const WET_PCT = [0.04, 0.08, 0.12, 0.18];      // share of the field treated as its wettest-lying ground, by low-spot sensitivity
 const ELEV_RAMP = [[0, [38, 120, 170]], [.25, [70, 170, 140]], [.5, [220, 215, 90]], [.75, [230, 140, 50]], [1, [170, 50, 40]]];
 
 function rampColor(t) {
@@ -129,6 +131,8 @@ function retune(g, tune) {
   g.depressions = findDepressions(g, LOW_LEVELS[g.tune.low]);
   g.waterways = findWaterways(g, WW_LEVELS[g.tune.ww]);
   g.depressions.forEach(d => { d.tile = designTile(g, d); });
+  g.waterways.forEach(w => { w.tile = designMain(w); });
+  g.wet = findWetAreas(g, WET_PCT[g.tune.low]);
   checkWaterways(g, g.img || null);
 }
 
@@ -193,7 +197,7 @@ function findWaterways(g, thrAc) {
     const drop = S[main.head] - S[exit];
     out.push({ segs: list, lenFt, mainFt: main.len * FT, drainAc: A[exit] * g.cellAc,
       slopePct: main.len > 0 ? Math.max(0, drop / main.len * 100) : 0, exit, exitLL: ll(g, exit),
-      mid: main.pts[Math.floor(main.pts.length / 2)] });
+      mid: main.pts[Math.floor(main.pts.length / 2)], main: main.pts, quarter: main.pts[Math.floor(main.pts.length / 4)] });
   }
   out.sort((a, b) => b.drainAc - a.drainAc);
   out.forEach((w, k) => w.label = 'W' + (k + 1));
@@ -223,6 +227,53 @@ function designTile(g, d) {
   return { pts, lenFt: len * FT, gradePct: grade * 100, flat: natural < gmin, maxDepthFt: maxDepth * FT, outDepthFt: outDepth * FT,
     q, basis: qWs >= qPond ? 'ws' : 'pond', size, end: c, endLL: ll(g, c),
     lateralFt: d.areaAc >= 0.25 ? Math.round(d.areaAc * 43560 / 60 / 10) * 10 : 0 };
+}
+
+// a tile main following a flow path, sized as the outlet for the acres that drain to it (3/8 in/day, subsurface)
+function designMain(w) {
+  const grade = Math.max(0.001, w.slopePct / 100), q = 0.375 * w.drainAc / 23.8;
+  let size = null; for (const s of TILE_SIZES) if (tileCap(s, grade) >= q) { size = s; break; }
+  return { lenFt: w.mainFt, gradePct: grade * 100, q, size, cap24Ac: tileCap(24, grade) * 23.8 / 0.375 };
+}
+// the wettest-lying ground in the field by terrain (flat and collecting water), outside the closed low spots
+function findWetAreas(g, pct) {
+  const { W, H, M, A, GX, GY, D, S, cs, cells } = g, N = W * H;
+  const inDep = new Uint8Array(N); for (const d of g.depressions) for (const c of d.members) inDep[c] = 1;
+  const tw = new Float32Array(N);
+  for (const i of cells) tw[i] = Math.log(A[i] * cs / (Math.hypot(GX[i], GY[i]) + 0.002));
+  const r = Math.max(1, Math.round(12 / cs)), sm = new Float32Array(N), vals = [];
+  for (const i of cells) {                      // average over ~25 m so thin channels wash out and broad flats stay
+    const x = i % W, y = (i - x) / W; let s = 0, n = 0;
+    for (let dy = -r; dy <= r; dy++) { const yy = y + dy; if (yy < 0 || yy >= H) continue; for (let dx = -r; dx <= r; dx++) { const xx = x + dx; if (xx < 0 || xx >= W) continue; const j = yy * W + xx; if (M[j]) { s += Math.min(tw[j], 12); n++; } } }
+    sm[i] = s / n; vals.push(sm[i]);
+  }
+  vals.sort((a, b) => a - b);
+  const thr = vals[Math.min(vals.length - 1, Math.floor(vals.length * (1 - pct)))];
+  const lab = new Int32Array(N).fill(-1), out = [];
+  for (const start of cells) {
+    if (lab[start] >= 0 || inDep[start] || sm[start] < thr) continue;
+    const id = out.length, stack = [start], members = []; lab[start] = id; let sx = 0, sy = 0, low = start;
+    while (stack.length) {
+      const c = stack.pop(); members.push(c); if (A[c] > A[low]) low = c;
+      const x = c % W, y = (c - x) / W; sx += x; sy += y;
+      for (let k = 0; k < 8; k++) { const xx = x + DX[k], yy = y + DY[k]; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; const m = yy * W + xx; if (M[m] && lab[m] < 0 && !inDep[m] && sm[m] >= thr) { lab[m] = id; stack.push(m); } }
+    }
+    out.push({ members, low, cx: sx / members.length, cy: sy / members.length, areaAc: members.length * g.cellAc });
+  }
+  const kept = out.filter(a => a.areaAc >= 0.4).sort((a, b) => b.areaAc - a.areaAc).slice(0, 8);
+  kept.forEach((a, k) => {
+    a.label = 'P' + (k + 1);
+    let best = a.members[0], bd = 1e18;
+    for (const c of a.members) { const x = c % W, y = (c - x) / W, d = (x - a.cx) ** 2 + (y - a.cy) ** 2; if (d < bd) { bd = d; best = c; } }
+    a.cen = best; a.cenLL = ll(g, best);
+    const pts = [a.low]; let c = a.low, len = 0, guard = 0;
+    while (D[c] >= 0 && M[D[c]] && guard++ < 1e5) { len += stepLen(g, c); c = D[c]; pts.push(c); }
+    const grade = Math.max(0.001, len > 0 ? (S[a.low] - S[c]) / len : 0), q = 0.375 * a.areaAc / 23.8;
+    let size = null; for (const s of TILE_SIZES) if (tileCap(s, grade) >= q) { size = s; break; }
+    a.pts = pts; a.end = c; a.endLL = ll(g, c); a.lenFt = len * FT; a.gradePct = grade * 100; a.size = size;
+    a.lateralFt = Math.round(a.areaAc * 43560 / 60 / 10) * 10;
+  });
+  return kept;
 }
 
 /* ---------- existing grassed waterway check (aerial photo) ----------
@@ -314,7 +365,7 @@ function checkWaterways(g, img) {
     }
     if (total <= 0 || checked / total < 0.4) { w.check = { status: 'unchecked' }; continue; }
     const cover = (grass + wood) / checked, treeShare = wood / checked;       // cover = share that needs no waterway work
-    w.check = { status: treeShare >= 0.7 ? 'wooded' : cover >= 0.7 ? 'existing' : cover >= 0.3 ? 'partial' : 'none', cover, treeShare,
+    w.check = { status: cover >= KICK_OUT ? (treeShare >= cover / 2 ? 'wooded' : 'existing') : 'none', cover, treeShare,
       grassFt: w.lenFt * grass / checked, treeFt: w.lenFt * treeShare, bareFt: w.lenFt * (1 - cover) };
   }
 }
@@ -328,19 +379,13 @@ function lowMethod(d, o) {
   if (d.drainFt <= 100 && d.maxFt <= 0.5) return 'drain';
   return 'tile';
 }
-// split a waterway into runs of cells for drawing: kind 'old' (grassed), 'trees' or 'new' (needs work)
+// cells to draw for a waterway that needs work; paths kicked out for grass or trees draw nothing
 function waterwayRuns(g, w, o) {
-  const force = o === 'existing' ? 'old' : o === 'wooded' ? 'trees' : o === 'needs' ? 'new' : null, runs = [];
-  for (const s of w.segs) {
-    let cur = null;
-    for (let i = 0; i < s.pts.length; i++) {
-      const f = s.grass ? s.grass[i] : 0, kind = force || (f === 2 ? 'old' : f === 3 ? 'trees' : 'new');
-      if (!cur || cur.kind !== kind) { if (cur) cur.pts.push(s.pts[i]); cur = { kind, pts: [s.pts[i]] }; runs.push(cur); }
-      else cur.pts.push(s.pts[i]);
-    }
-  }
-  return runs.filter(r => r.pts.length > 1);
+  if (noWork(wwStatus(w, o))) return [];
+  return w.segs.filter(s => s.pts.length > 1).map(s => ({ kind: 'new', pts: s.pts }));
 }
+// a tile main is offered along every flow path except wooded ones, unless the owner leaves it out
+function mainOn(w, ov) { return ov['T' + w.label.slice(1)] !== 'skip' && ov[w.label] !== 'skip' && wwStatus(w, ov[w.label]) !== 'wooded'; }
 function chaikin(pts, n) {
   for (let it = 0; it < n; it++) {
     if (pts.length < 3) return pts;
@@ -424,6 +469,8 @@ function drawPlan(g, maxW, maxH, opt) {
     ctx.lineWidth = (major ? 2 : 1) * U;
     marchingSquares(ctx, S, W, bx0, by0, bx1 + 1, by1 + 1, lv, k);
   }
+  ctx.fillStyle = 'rgba(240,130,20,.30)';
+  for (const a of g.wet || []) { if (ov[a.label] === 'skip') continue; for (const c of a.members) { const x = c % W, y = (c - x) / W; ctx.fillRect((x - bx0) * k, (y - by0) * k, k + .5, k + .5); } }
   ctx.fillStyle = 'rgba(30,110,230,.55)';
   for (const d of g.depressions) { if (ov[d.label] === 'skip') continue; for (const c of d.members) { const x = c % W, y = (c - x) / W; ctx.fillRect((x - bx0) * k, (y - by0) * k, k + .5, k + .5); } }
   ctx.restore();
@@ -435,7 +482,10 @@ function drawPlan(g, maxW, maxH, opt) {
   for (const w of g.waterways) if (ov[w.label] !== 'skip') runs.push(...waterwayRuns(g, w, ov[w.label]));
   for (const r of runs) { trace(r.pts); ctx.strokeStyle = '#fff'; ctx.lineWidth = 9 * U; ctx.stroke(); }
   for (const r of runs) { trace(r.pts); ctx.strokeStyle = r.kind === 'old' ? '#1f8f3a' : r.kind === 'trees' ? '#8a6a3b' : '#1658c4'; ctx.lineWidth = 5 * U; ctx.stroke(); }
-  // tile routes
+  // tile: mains along flow paths, collectors out of wet ground, outlet lines from low spots
+  const dash = cellsArr => { trace(cellsArr); ctx.setLineDash([]); ctx.strokeStyle = '#fff'; ctx.lineWidth = 7 * U; ctx.stroke(); trace(cellsArr); ctx.setLineDash([14 * U, 10 * U]); ctx.strokeStyle = '#e06a00'; ctx.lineWidth = 4 * U; ctx.stroke(); ctx.setLineDash([]); };
+  for (const w of g.waterways) if (mainOn(w, ov)) dash(w.main);
+  for (const a of g.wet || []) if (ov[a.label] !== 'skip' && a.pts.length > 1) dash(a.pts);
   for (const d of g.depressions) {
     if (ov[d.label] === 'skip' || lowMethod(d, ov[d.label]) !== 'tile' || d.tile.pts.length < 2) continue;
     trace(d.tile.pts); ctx.setLineDash([]); ctx.strokeStyle = '#fff'; ctx.lineWidth = 7 * U; ctx.stroke();
@@ -457,10 +507,14 @@ function drawPlan(g, maxW, maxH, opt) {
   };
   for (const w of g.waterways) {
     if (ov[w.label] === 'skip') continue;
+    if (noWork(wwStatus(w, ov[w.label])) && !mainOn(w, ov)) continue;
     const p = cxy(g, w.exit), q = toPx(p[0], p[1]);
     ctx.fillStyle = '#c0392b'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 * U; ctx.beginPath(); ctx.arc(q[0], q[1], 8 * U, 0, 7); ctx.fill(); ctx.stroke();
-    const st = wwStatus(w, ov[w.label]); tag(w.label, w.mid, st === 'existing' ? '#1f8f3a' : st === 'wooded' ? '#8a6a3b' : '#1658c4');
+    const st = wwStatus(w, ov[w.label]);
+    if (!noWork(st)) tag(w.label, w.mid, '#1658c4');
   }
+  for (const w of g.waterways) if (mainOn(w, ov)) tag('T' + w.label.slice(1), w.quarter, '#c25a00');
+  for (const a of g.wet || []) if (ov[a.label] !== 'skip') tag(a.label, a.cen, '#c25a00');
   for (const d of g.depressions) if (ov[d.label] !== 'skip') tag(d.label, d.pit, '#0a3d8f');
 
   // north arrow, scale bar, photo credit
@@ -525,6 +579,27 @@ function workItems(g, ov) {
       line: `${f1(d.areaAc)} ac, ${f1(d.maxFt)} ft deep`
     });
   }
+  for (const a of g.wet || []) {
+    if (ov[a.label] === 'skip') continue;
+    items.push({ id: a.label, type: 'wet', kind: 'Wet-lying ground', where: fll(a.cenLL),
+      size: `${f1(a.areaAc)} ac of the flattest, most water-collecting ground in this field`,
+      recTitle: 'Pattern tile',
+      rec: `Pattern tile this area: about ${f0(a.lateralFt)} ft of 4-inch laterals at roughly 60-ft spacing (40 to 80 ft depending on soil), feeding ` +
+        (a.lenFt >= 20 ? `a ${a.size ? a.size + '-inch ' : ''}collector that runs about ${f0(a.lenFt)} ft at ${a.gradePct.toFixed(2)}% to the outlet at ${fll(a.endLL)}, where this ground drains off the field, or into a nearer main.` : `an outlet at the field edge beside it (${fll(a.endLL)}).`) +
+        ` Collector sized for 3/8 inch per day over ${f1(a.areaAc)} acres. This is judged from terrain alone: confirm the ground really stays wet (yield maps, standing water, soil type) and is not already tiled.`,
+      more: [], short: `Pattern tile: about ${f0(a.lateralFt)} ft of laterals`, line: `${f1(a.areaAc)} ac` });
+  }
+  for (const w of g.waterways) {
+    if (!mainOn(w, ov)) continue;
+    const t = w.tile, id = 'T' + w.label.slice(1);
+    items.push({ id, type: 'main', kind: 'Tile main along a flow path', where: 'Outlet at ' + fll(w.exitLL),
+      size: `${f0(t.lenFt)} ft along the draw, ${f1(w.drainAc)} ac drain toward it, ${t.gradePct.toFixed(2)}% grade`,
+      recTitle: t.size ? `${t.size}-inch tile main` : 'Tile main (24-inch or larger)',
+      rec: `This draw is the natural route for a tile main. Run about ${f0(t.lenFt)} ft of ` + (t.size ? `${t.size}-inch tile` : 'tile') + ` up it, set to one side of the channel bottom, to the outlet at ${fll(w.exitLL)}. ` +
+        (t.size ? `That size carries 3/8 inch per day from all ${f1(w.drainAc)} acres at this grade, so laterals from wet ground on either side can tie in later. ` : `A 24-inch main carries about ${f0(t.cap24Ac)} acres at this grade; the full ${f1(w.drainAc)} acres needs a larger or second line. `) +
+        'Step the size down toward the upper end as the acres served drop. Skip this if a main already runs here.',
+      more: [], short: `Tile main: ${t.size ? t.size + '-in, ' : ''}${f0(t.lenFt)} ft`, line: `${f0(t.lenFt)} ft, ${f1(w.drainAc)} ac` });
+  }
   for (const w of g.waterways) {
     if (ov[w.label] === 'skip') continue;
     const st = wwStatus(w, ov[w.label]), owner = ['existing', 'needs', 'wooded'].includes(ov[w.label]), c = w.check || {};
@@ -536,11 +611,11 @@ function workItems(g, ov) {
     if (st === 'wooded') {
       recTitle = 'Wooded draw: no waterway recommended';
       rec = (owner ? 'The owner reports trees or brush along this path.' : `The aerial photo shows trees along about ${Math.round(c.treeShare * 100)}% of this path.`) + ' No waterway is recommended here. It is shown for reference only.';
-      short = owner ? 'Trees or brush (set by you). No work.' : 'Trees along this path. No work.';
+      short = owner ? 'Trees or brush (set by you). No work.' : 'Trees along this path. Not recommended.';
     } else if (st === 'existing') {
       recTitle = 'Already grassed: no work recommended';
       rec = (owner ? 'The owner reports a grassed waterway is already in place on this path.' : `The aerial photo shows a grassed waterway along about ${pct}% of this path.`) + ' It is shown for reference only and is not part of the recommended work.';
-      short = owner ? 'Already has a waterway (set by you). No work.' : `Already grassed (photo: ${pct}%). No work.`;
+      short = owner ? 'Already has a waterway (set by you). No work.' : `Grass or trees on ${pct}% of it. Not recommended.`;
     } else if (st === 'partial') {
       recTitle = 'Extend or repair the existing waterway';
       rec = `The aerial photo shows a grassed strip along about ${pct}% of this path (roughly ${f0(c.grassFt)} ft, green on the map). About ${f0(c.bareFt)} ft shows no grass (blue on the map). On the bare stretches, ` + build + steep + treeNote;
@@ -549,7 +624,7 @@ function workItems(g, ov) {
       recTitle = 'Build a grassed waterway';
       rec = (st === 'unchecked' ? 'The aerial photo could not be checked for this path, so confirm in the field that no waterway exists. ' : owner ? '' : 'No grassed strip shows on the aerial photo along this path. ') +
         build.charAt(0).toUpperCase() + build.slice(1) + steep + ' Check the outlet where it leaves the field for erosion and keep it stable.' + treeNote;
-      short = st === 'unchecked' ? 'Needs waterway (photo not checked)' : 'Needs waterway: ' + f0(c.bareFt != null && !owner ? c.bareFt : w.lenFt) + ' ft';
+      short = st === 'unchecked' ? 'Needs waterway (photo not checked)' : 'Needs waterway: ' + f0(w.lenFt) + ' ft';
     }
     items.push({ id: w.label, type: 'ww', kind: st === 'existing' ? 'Existing grassed waterway' : st === 'wooded' ? 'Wooded draw' : 'Concentrated flow path', status: st, existing: noWork(st), where: 'Leaves field at ' + fll(w.exitLL),
       size: `${f0(w.lenFt)} ft in field, drains ${f1(w.drainAc)} ac, ${f1(w.slopePct)}% average slope`,
@@ -568,24 +643,29 @@ function summaryLines(g, ov) {
   if (filled.length) parts.push(`${filled.length} to fill (about ${f0(filled.reduce((t, i) => t + dep(i.id).volCY, 0))} CY)`);
   if (drained.length) parts.push(`${drained.length} to surface drain`);
   const exist = wws.filter(i => i.existing), need = wws.filter(i => !i.existing);
-  const needFt = need.reduce((t, i) => { const w = way(i.id); return t + (w.check && w.check.bareFt != null && !ov[i.id] ? w.check.bareFt : w.lenFt); }, 0);
+  const needFt = need.reduce((t, i) => { return t + way(i.id).lenFt; }, 0);
+  const mains = items.filter(i => i.type === 'main'), wets = items.filter(i => i.type === 'wet'), tp = [];
+  if (mains.length) tp.push(`${mains.length} main${mains.length > 1 ? 's' : ''} along flow paths (about ${f0(mains.reduce((t, i) => t + way('W' + i.id.slice(1)).tile.lenFt, 0))} ft)`);
+  if (wets.length) tp.push(`${wets.length} wet area${wets.length > 1 ? 's' : ''} to pattern tile (about ${f0(wets.reduce((t, i) => t + g.wet.find(a => a.label === i.id).lateralFt, 0))} ft of laterals)`);
+  const tileLine = tp.join('; ');
   const wp = [];
-  if (exist.length) wp.push(`${exist.length} already grassed or wooded (no work)`);
-  if (need.length) wp.push(`${need.length} to build or extend (about ${f0(needFt)} ft)`);
+  if (need.length) wp.push(`${need.length} to build (about ${f0(needFt)} ft)`);
   return [
     ['Field size', f1(g.fieldAc) + ' acres'],
     ['Elevation', `${f0(g.mn * FT)} to ${f0(g.mx * FT)} ft (${f1((g.mx - g.mn) * FT)} ft relief)`],
     ['Average slope', f1(g.slopePct) + '%'],
     ['Ponding area', f1(g.pondAc) + ' acres'],
     ['Low spots', lows.length ? parts.join('; ') : 'None to address'],
-    ['Flow paths', wws.length ? wp.join('; ') : 'None to address'],
+    ['Tile', tileLine || 'None recommended'],
+    ['Waterways', need.length ? wp.join('; ') : 'None to build'],
     ['Main outlet', `${fll(ll(g, g.outlet))}, drains ${f0(g.outletAc)} ac`]
   ];
 }
 
 const NOTES = [
   'Planning-level estimate from USGS 3DEP elevation data (mostly about 10 m / 33 ft resolution). Small rills, existing tile, terraces and grade changes under about 0.5 ft are below what this data can see. Confirm grades with an RTK survey before bidding or moving dirt.',
-  'Existing waterways are judged from the aerial photo, which may be a year or more old and can be fooled by crop color. Confirm on the ground.',
+  'A flow path is dropped from the waterway list when the aerial photo shows grass or trees along it. The photo may be a year or more old and can be fooled by crop color, so confirm on the ground.',
+  'Wet-lying ground (P#) and tile mains (T#) come from terrain alone: the flattest, most water-collecting ground, and the draws that would carry a main. They do not account for soil type or for tile already in the ground.',
   'Tile sizes use Manning\'s equation for corrugated plastic tile flowing full, with a drainage coefficient of 1/2 inch per day over the watershed feeding each intake. Final size, grade, depth and outlet are the contractor\'s design. Existing tile is not mapped here; locate it first, since tying into a nearby main is often cheaper than a new outlet.',
   'Before draining or filling any low spot, check with the county FSA/NRCS office (form AD-1026). Draining a wetland without a determination can cost USDA program eligibility.',
   'Fill volumes are the space below each low spot\'s spill elevation. They are a ceiling: a partial fill or a drain often fixes the problem with less dirt.',
@@ -628,7 +708,7 @@ async function buildPDF(g, opts) {
     page.drawRectangle({ x, y: y - ih, width: iw, height: ih, borderColor: mute, borderWidth: .5 });
     y -= ih + 10;
   };
-  const key = 'Green lines = existing grassed waterway. Brown lines = trees along the flow path, left alone. Blue lines = waterway to build or extend. Orange dashes = tile route from a low spot to its outlet (orange square). Dark blue = ponding low spots (D#). Red dots = where flow paths (W#) leave the field.';
+  const key = 'Blue lines = waterway to build (W#). Orange dashes = tile: mains along flow paths (T#), collectors from wet ground and outlet lines from low spots. Orange shading = wet-lying ground to pattern tile (P#). Dark blue = ponding low spots (D#). Red dots = where flow paths leave the field. Flow paths that already show grass or trees on the aerial photo are left out.';
 
   // page 1: summary and topo plan
   newPage();
@@ -657,11 +737,11 @@ async function buildPDF(g, opts) {
   // work items
   newPage();
   text('Recommended work', MG, bold, 16, ink); y -= 4;
-  const allItems = workItems(g, ov), items = allItems.filter(i => !i.existing), inPlace = allItems.filter(i => i.existing);
+  const items = workItems(g, ov).filter(i => !i.existing);
   if (!items.length) text('No low spots or flow paths needing dirt work were found at this data resolution.', MG, font, 10.5);
   for (const it of items) {
     if (y < MG + 130) newPage();
-    page.drawRectangle({ x: MG, y: y - 18, width: 34, height: 18, color: it.type === 'low' ? colors.low : colors.ww });
+    page.drawRectangle({ x: MG, y: y - 18, width: 34, height: 18, color: it.type === 'low' ? colors.low : it.type === 'ww' ? colors.ww : rgb(.76, .35, 0) });
     page.drawText(it.id, { x: MG + 6, y: y - 13.5, size: 11, font: bold, color: rgb(1, 1, 1) });
     page.drawText(san(it.kind), { x: MG + 44, y: y - 13.5, size: 11.5, font: bold, color: ink });
     y -= 24;
@@ -672,12 +752,6 @@ async function buildPDF(g, opts) {
     text(it.rec, MG + 44, font, 10, ink);
     for (const [label, body] of it.more) { y -= 3; labeled(label + ':', body, MG + 44, 9.5); }
     y -= 12;
-  }
-  if (inPlace.length) {
-    if (y < MG + 90) newPage();
-    text('Already in place: no work recommended', MG, bold, 12); y -= 2;
-    for (const it of inPlace) { labeled(it.id + ':', `${it.kind}, ${it.size}. ${it.where}. Shown ${it.status === 'wooded' ? 'in brown' : 'in green'} on the maps for reference.`, MG, 9.5); y -= 2; }
-    y -= 8;
   }
   if (opts.notes) { if (y < MG + 80) newPage(); text('Owner notes', MG, bold, 12); y -= 2; text(opts.notes, MG, font, 10); y -= 8; }
   if (y < MG + 200) newPage();
@@ -706,8 +780,13 @@ function buildKML(g, name, ov) {
       pm += `<Placemark><name>${d.label} tile outlet</name><styleUrl>#pond</styleUrl><Point><coordinates>${c(d.tile.endLL)}</coordinates></Point></Placemark>\n`;
     }
   }
+  for (const a of g.wet || []) { const it = byId[a.label]; if (!it) continue;
+    pm += `<Placemark><name>${a.label} wet ground: pattern tile</name><description>${esc(it.size + '. ' + it.rec)}</description><styleUrl>#pond</styleUrl><Point><coordinates>${c(a.cenLL)}</coordinates></Point></Placemark>\n`;
+    if (a.pts.length > 1) pm += `<Placemark><name>${a.label} collector route</name><styleUrl>#tile</styleUrl>${line(a.pts)}</Placemark>\n`; }
+  for (const w of g.waterways) { const it = byId['T' + w.label.slice(1)]; if (!it) continue;
+    pm += `<Placemark><name>${it.id} ${esc(it.recTitle)}</name><description>${esc(it.size + '. ' + it.rec)}</description><styleUrl>#tile</styleUrl>${line(w.main)}</Placemark>\n`; }
   for (const w of g.waterways) {
-    const it = byId[w.label]; if (!it) continue;
+    const it = byId[w.label]; if (!it || it.existing) continue;
     const runs = waterwayRuns(g, w, ov[w.label]);
     for (const [kind, label, style] of [['old', 'existing grassed waterway (no work)', '#wwold'], ['trees', 'trees along flow path (no work)', '#wwtree'], ['new', 'waterway to build', '#wwnew']]) {
       const rs = runs.filter(r => r.kind === kind); if (!rs.length) continue;
@@ -725,5 +804,5 @@ ${pm}</Document></kml>`;
 }
 
 global.FieldEngine = { analyzeGrid, retune, WW_LEVELS, LOW_LEVELS, DEFAULT_TUNE, checkWaterways, wwStatus, lowMethod, waterwayRuns, chaikin, cellLL: ll, drawPlan, buildPDF, buildKML,
-  workItems, summaryLines, rampColor, ELEV_RAMP, FT, ACRE, POND_M };
+  workItems, summaryLines, mainOn, noWork, rampColor, ELEV_RAMP, FT, ACRE, POND_M };
 })(window);

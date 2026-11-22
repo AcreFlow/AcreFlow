@@ -90,7 +90,7 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
 .item.flash{border-color:var(--rain);background:rgba(79,179,255,.12)}
 .item-h{display:flex;gap:8px;align-items:center}
 .tag{flex:none;min-width:36px;text-align:center;padding:3px 6px;border-radius:7px;font-weight:700;font-size:13px;color:#fff;background:#1658c4}
-.tag.low{background:#0a3d8f}.tag.old{background:#1f8f3a}.tag.wood{background:#8a6a3b}
+.tag.low{background:#0a3d8f}.tag.old{background:#1f8f3a}.tag.wood{background:#8a6a3b}.tag.tile{background:#c25a00}
 .item-t{flex:1;font-weight:600;line-height:1.25}
 .item-t small{display:block;font-weight:400;color:var(--mute);font-size:13px}
 .item-r{margin:8px 0;font-size:14px}
@@ -158,7 +158,7 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
             <div class="slider" id="exWrap"><span>Height ×</span><input type="range" id="ex" min="1" max="10" step="0.5" value="4" aria-label="Height exaggeration"><output id="exOut">4×</output></div>
             <div class="tog"><label for="tRain">Rainfall flow<small>Drops run downhill and gather</small></label><input type="checkbox" class="sw r" id="tRain"></div>
             <div class="slider hide" id="rainWrap"><span>Rain</span><input type="range" id="rainAmt" min="300" max="4000" step="100" value="1500" aria-label="Rain amount"><output id="rainOut">1.5k</output></div>
-            <div class="tog"><label for="tPlan">Dirt work plan<small>Waterways, tile routes and low spots</small></label><input type="checkbox" class="sw" id="tPlan" checked></div>
+            <div class="tog"><label for="tPlan">Dirt work plan<small>Waterways, tile and low spots</small></label><input type="checkbox" class="sw" id="tPlan" checked></div>
             <div class="tog"><label for="tChan">Flow paths<small>Where runoff concentrates</small></label><input type="checkbox" class="sw r" id="tChan"></div>
             <div class="slider hide" id="chanWrap"><span>Detail</span><input type="range" id="chanThr" min="1" max="9" step="1" value="5" aria-label="Flow path detail"><output id="chanOut">5</output></div>
             <div class="tog"><label for="tPond">Ponding spots<small>Low spots with no way out</small></label><input type="checkbox" class="sw r" id="tPond"></div>
@@ -174,13 +174,13 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
 
         <div id="vWork" class="hide">
           <p class="hint" id="itemsHint" style="margin-top:10px"></p>
-          <div class="key"><span><i style="background:#39d353"></i>Existing waterway</span><span><i style="background:#2f7bff"></i>Waterway needed</span><span><i style="background:var(--tile)"></i>Tile route</span><span><i style="background:#b08a52"></i>Trees: left alone</span></div>
+          <div class="key"><span><i style="background:#2f7bff"></i>Waterway to build</span><span><i style="background:var(--tile)"></i>Tile</span><span><i style="background:rgba(255,138,30,.5);height:10px"></i>Wet ground</span></div>
           <div id="items"></div>
           <h2>How much to flag</h2>
           <div class="slider"><span>Waterways</span><input type="range" id="sWw" min="0" max="4" step="1" value="3" aria-label="Waterway sensitivity"><output id="sWwOut"></output></div>
           <p class="hint" style="font-size:13px;margin:-4px 0 8px">Flags a flow path once this many acres drain to it. Slide right for more waterways.</p>
           <div class="slider"><span>Low spots</span><input type="range" id="sLow" min="0" max="3" step="1" value="2" aria-label="Low spot sensitivity"><output id="sLowOut"></output></div>
-          <p class="hint" style="font-size:13px;margin:-4px 0 0">Flags a low spot once water would stand this deep. Slide right for more low spots and tile. Changing either resets your choices above.</p>
+          <p class="hint" style="font-size:13px;margin:-4px 0 0">Flags a low spot once water would stand this deep. Slide right for more low spots, wet ground and tile. Changing either resets your choices above.</p>
           <h2>Report for the contractor</h2>
           <input class="field-in" id="fname" type="text" placeholder="Field name" maxlength="60" autocomplete="off">
           <textarea class="field-in" id="fnotes" placeholder="Notes (optional): access, known tile, timing…" maxlength="600"></textarea>
@@ -198,7 +198,7 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
 </div>
 
 <script src="vendor/maplibre-gl.js"></script>
-<script src="engine.js?v=8"></script>
-<script src="app.js?v=8"></script>
+<script src="engine.js?v=9"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>

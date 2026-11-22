@@ -1,7 +1,7 @@
 /* AcreFlow app: map, field drawing, overlays, rain, dirt work plan, report export. */
 {
 'use strict';
-const VERSION = '8';
+const VERSION = '9';
 const $ = id => document.getElementById(id);
 const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
 const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
@@ -336,7 +336,7 @@ function buildOverlays() {
 function clearAnalysis() {
   runId++;
   stopRainLoop(); clearRainCanvas();
-  ['ov-pond', 'ov-chan', 'ov-elev'].forEach(id => { if (map.getLayer(id)) map.removeLayer(id); if (map.getSource(id)) map.removeSource(id); });
+  ['ov-wet', 'ov-pond', 'ov-chan', 'ov-elev'].forEach(id => { if (map.getLayer(id)) map.removeLayer(id); if (map.getSource(id)) map.removeSource(id); });
   if (map.getSource('plan')) map.getSource('plan').setData(empty);
   grid = null; R = null; LAT = null; pdfCache = null; photo = 'none';
   $('stats').innerHTML = ''; $('items').innerHTML = ''; $('itemsHint').textContent = ''; $('reportMsg').textContent = '';
@@ -364,10 +364,16 @@ function planFeatures() {
   const line = (cellsArr, kind, id) => feats.push({ type: 'Feature', properties: { kind, id }, geometry: { type: 'LineString', coordinates: E.chaikin(cellsArr.map(c => E.cellLL(g, c)), 2) } });
   const point = (llp, id, icon) => feats.push({ type: 'Feature', properties: { id, icon }, geometry: { type: 'Point', coordinates: llp } });
   for (const w of g.waterways) {
-    if (ov[w.label] === 'skip') continue;
-    for (const r of E.waterwayRuns(g, w, ov[w.label])) line(r.pts, r.kind, w.label);
-    const st = E.wwStatus(w, ov[w.label]);
-    point(E.cellLL(g, w.mid), w.label, tagIcon(w.label, st === 'existing' ? '#1f8f3a' : st === 'wooded' ? '#8a6a3b' : '#1658c4'));
+    if (ov[w.label] !== 'skip' && !E.noWork(E.wwStatus(w, ov[w.label]))) {
+      for (const r of E.waterwayRuns(g, w, ov[w.label])) line(r.pts, 'new', w.label);
+      point(E.cellLL(g, w.mid), w.label, tagIcon(w.label, '#1658c4'));
+    }
+    if (E.mainOn(w, ov)) { const id = 'T' + w.label.slice(1); line(w.main, 'tile', id); point(E.cellLL(g, w.quarter), id, tagIcon(id, '#c25a00')); }
+  }
+  for (const p of g.wet) {
+    if (ov[p.label] === 'skip') continue;
+    if (p.pts.length > 1) line(p.pts, 'tile', p.label);
+    point(p.cenLL, p.label, tagIcon(p.label, '#c25a00'));
   }
   for (const d of g.depressions) {
     if (ov[d.label] === 'skip') continue;
@@ -382,12 +388,20 @@ function refreshPlan() {
   const g = grid;
   pdfCache = null;
   map.getSource('plan').setData(fc(planFeatures()));
+  { // shade the wet-lying ground
+    const wetSet = new Set(); for (const p of g.wet) if (ov[p.label] !== 'skip') for (const c of p.members) wetSet.add(c);
+    const url = makeImage(i => wetSet.has(i) ? [255, 138, 30, 95] : null);
+    if (map.getSource('ov-wet')) map.getSource('ov-wet').updateImage({ url, coordinates: g.coords });
+    else { map.addSource('ov-wet', { type: 'image', url, coordinates: g.coords }); map.addLayer({ id: 'ov-wet', type: 'raster', source: 'ov-wet', layout: { visibility: $('tPlan').checked ? 'visible' : 'none' }, paint: { 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, 'mask'); }
+  }
   const items = E.workItems(g, ov), byId = Object.fromEntries(items.map(i => [i.id, i]));
-  const all = [...g.depressions.map(d => ({ id: d.label, type: 'low', o: d })), ...g.waterways.map(w => ({ id: w.label, type: 'ww', o: w }))];
+  const all = [...g.depressions.map(d => ({ id: d.label, type: 'low', o: d })), ...g.wet.map(p => ({ id: p.label, type: 'wet', o: p })),
+    ...g.waterways.filter(w => E.wwStatus(w, ov[w.label]) !== 'wooded' && ov[w.label] !== 'skip').map(w => ({ id: 'T' + w.label.slice(1), type: 'main', o: w })),
+    ...g.waterways.map(w => ({ id: w.label, type: 'ww', o: w }))];
   const todo = items.filter(i => !i.existing).length;
   $('tabWork').textContent = todo ? `Dirt work (${todo})` : 'Dirt work';
   $('itemsHint').textContent = !all.length ? 'No low spots or flow paths big enough to need dirt work showed up at this data resolution.'
-    : photo === 'loading' ? 'Checking the aerial photo for waterways that are already grassed…'
+    : photo === 'loading' ? 'Checking the aerial photo for grass and trees along the flow paths…'
     : photo === 'failed' ? 'The aerial photo did not load, so existing waterways could not be checked. Set each one yourself below.'
     : 'Tap Map on an item to see it. Change the choice if you know the ground better than the data does.';
   const isDone = x => !!(byId[x.id] && byId[x.id].existing), card = a => {
@@ -398,21 +412,24 @@ function refreshPlan() {
       const d = a.o, auto = { tile: 'tile it', fill: 'fill it', drain: 'surface drain' }[E.lowMethod(d, null)];
       cls = 'low'; line = `${d.areaAc.toFixed(1)} ac, up to ${d.maxFt.toFixed(1)} ft deep`;
       sel = opt('auto', `Recommended: ${auto}`) + opt('tile', 'Tile it') + opt('fill', 'Fill it') + opt('drain', 'Surface drain') + opt('skip', 'Leave out of the report');
+    } else if (a.type === 'wet' || a.type === 'main') {
+      cls = 'tile'; line = a.type === 'wet' ? `${a.o.areaAc.toFixed(1)} ac of wet-lying ground` : `along ${a.o.label}, ${a.o.drainAc.toFixed(1)} ac drain toward it`;
+      sel = opt('auto', 'Include in the report') + opt('skip', 'Leave out of the report');
     } else {
       const w = a.o, st = w.check.status;
-      const auto = photo === 'loading' ? 'checking photo…' : st === 'existing' ? 'already grassed' : st === 'wooded' ? 'trees along it' : st === 'partial' ? 'partly grassed' : st === 'none' ? 'no waterway seen' : 'not checked';
+      const auto = photo === 'loading' ? 'checking photo…' : st === 'existing' ? 'grass seen' : st === 'wooded' ? 'trees seen' : st === 'none' ? 'bare, no grass or trees' : 'not checked';
       cls = it && it.status === 'existing' ? 'old' : it && it.status === 'wooded' ? 'wood' : ''; line = `${Math.round(w.lenFt).toLocaleString()} ft, drains ${w.drainAc.toFixed(1)} ac`;
       sel = opt('auto', `Photo check: ${auto}`) + opt('existing', 'Already has a waterway') + opt('wooded', 'Trees or brush: leave alone') + opt('needs', 'Needs a waterway') + opt('skip', 'Leave out of the report');
     }
     return `<div class="item" id="item-${a.id}"><div class="item-h"><span class="tag ${cls}">${a.id}</span>` +
-      `<div class="item-t">${a.type === 'low' ? 'Low spot' : 'Flow path'}<small>${esc(line)}</small></div>` +
+      `<div class="item-t">${{ low: 'Low spot', wet: 'Wet ground', main: 'Tile main', ww: 'Flow path' }[a.type]}<small>${esc(line)}</small></div>` +
       `<button class="btn sm" data-go="${a.id}">Map</button></div>` +
       `<div class="item-r">${it ? esc(it.short) : 'Left out of the report'}</div>` +
       `<select data-ov="${a.id}" aria-label="Choice for ${a.id}">${sel}</select></div>`;
   };
   const work = all.filter(x => !isDone(x)), done = all.filter(isDone);
   $('items').innerHTML = (all.length && !work.length ? '<p class="hint">Nothing here needs dirt work.</p>' : work.map(card).join('')) +
-    (done.length ? '<h2>Already in place: no work needed</h2>' + done.map(card).join('') : '');
+    (done.length ? '<h2>Kicked out: grass or trees seen</h2><p class="hint" style="font-size:13px">Not in the report and not drawn. Change one to "Needs a waterway" to bring it back.</p>' + done.map(card).join('') : '');
 }
 $('items').addEventListener('change', e => {
   const id = e.target.dataset.ov; if (!id) return;
@@ -423,11 +440,13 @@ $('items').addEventListener('change', e => {
 $('items').addEventListener('click', e => { const b = e.target.closest('[data-go]'); if (b) goItem(b.dataset.go); });
 function itemLL(id) {
   const d = grid.depressions.find(x => x.label === id); if (d) return d.pitLL;
+  const p = grid.wet.find(x => x.label === id); if (p) return p.cenLL;
+  if (id[0] === 'T') { const m = grid.waterways.find(x => x.label === 'W' + id.slice(1)); return m ? E.cellLL(grid, m.quarter) : null; }
   const w = grid.waterways.find(x => x.label === id); return w ? E.cellLL(grid, w.mid) : null;
 }
 function goItem(id) {
   const p = grid && itemLL(id); if (!p) return;
-  if (!$('tPlan').checked) { $('tPlan').checked = true; PLAN_LAYERS.forEach(l => vis(l, true)); }
+  if (!$('tPlan').checked) { $('tPlan').checked = true; [...PLAN_LAYERS, 'ov-wet'].forEach(l => vis(l, true)); }
   snap('peek');
   const pad = { top: $('searchForm').getBoundingClientRect().bottom + 14, bottom: grab.offsetHeight + heads.offsetHeight + 30, left: 18, right: 18 };
   map.easeTo({ center: p, zoom: Math.max(map.getZoom(), 16), padding: pad, duration: 800, freezeElevation: true });
@@ -554,7 +573,7 @@ $('tRain').onchange = () => setRain($('tRain').checked);
 $('rainQuick').onclick = () => setRain(!rainOn);
 $('rainAmt').oninput = () => { $('rainOut').textContent = (+$('rainAmt').value / 1000).toFixed(1) + 'k'; };
 $('rainAmt').onchange = () => { if (rainOn) initParticles(); };
-$('tPlan').onchange = () => PLAN_LAYERS.forEach(l => vis(l, $('tPlan').checked));
+$('tPlan').onchange = () => [...PLAN_LAYERS, 'ov-wet'].forEach(l => vis(l, $('tPlan').checked));
 $('tChan').onchange = () => { vis('ov-chan', $('tChan').checked); $('chanWrap').classList.toggle('hide', !$('tChan').checked); };
 $('chanThr').oninput = () => { $('chanOut').textContent = $('chanThr').value; };
 $('chanThr').onchange = () => { if (grid && map.getSource('ov-chan')) map.getSource('ov-chan').updateImage({ url: chanImage(), coordinates: grid.coords }); };
