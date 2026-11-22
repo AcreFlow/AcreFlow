@@ -1,7 +1,7 @@
 /* AcreFlow app: map, field drawing, overlays, rain, dirt work plan, report export. */
 {
 'use strict';
-const VERSION = '11';
+const VERSION = '12';
 const $ = id => document.getElementById(id);
 const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
 const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
@@ -263,7 +263,7 @@ async function analyze(poly) {
   const padX = Math.max((hi[0] - lo[0]) * .12, 0.0008), padY = Math.max((hi[1] - lo[1]) * .12, 0.0006);
   lo = [lo[0] - padX, lo[1] - padY]; hi = [hi[0] + padX, hi[1] + padY];
   let z = 15, x0, x1, y0, y1;
-  for (; z >= 10; z--) { x0 = Math.floor(lngToX(lo[0], z)); x1 = Math.ceil(lngToX(hi[0], z)); y0 = Math.floor(latToY(hi[1], z)); y1 = Math.ceil(latToY(lo[1], z)); if (Math.max(x1 - x0, y1 - y0) <= 700) break; }
+  for (; z >= 10; z--) { x0 = Math.floor(lngToX(lo[0], z)); x1 = Math.ceil(lngToX(hi[0], z)); y0 = Math.floor(latToY(hi[1], z)); y1 = Math.ceil(latToY(lo[1], z)); if (Math.max(x1 - x0, y1 - y0) <= 1000) break; }
   const W = x1 - x0, H = y1 - y0, N = W * H;
   let dem;
   try { dem = await mosaic((zz, tx, ty) => DEM_URL.replace('{z}', zz).replace('{x}', tx).replace('{y}', ty), z, x0, y0, W, H); }
@@ -308,7 +308,7 @@ async function analyze(poly) {
   });
 
   // aerial photo: used to spot waterways that are already grassed, and as the report's second map
-  const k = Math.pow(2, Math.max(0, Math.min(17 - z, Math.floor(Math.log2(1600 / Math.max(W, H))))));
+  const k = Math.pow(2, Math.max(0, Math.min(17 - z, Math.floor(Math.log2(2800 / Math.max(W, H))))));
   let img = null;
   try { img = await mosaic((zz, tx, ty) => `${ESRI}World_Imagery/MapServer/tile/${zz}/${ty}/${tx}`, z + Math.log2(k), x0 * k, y0 * k, W * k, H * k); img.k = k; } catch (e) {}
   if (id !== runId) return;

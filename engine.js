@@ -158,7 +158,7 @@ function findDepressions(g, lv) {
     out.push({ id, n, members, areaAc: n * g.cellAc, volCY: vol * cs * cs * CY, maxFt: maxP * FT,
       pit, pitLL: ll(g, pit), wsAc: g.A[prev] * g.cellAc, exit: c, exitLL: ll(g, c), drainFt: len * FT, spillElevFt: (S[pit] + maxP) * FT });
   }
-  const kept = out.filter(d => d.areaAc >= lv.a && d.volCY >= lv.v).sort((a, b) => b.volCY - a.volCY).slice(0, 25);
+  const kept = out.filter(d => d.areaAc >= lv.a && d.volCY >= lv.v).sort((a, b) => b.volCY - a.volCY).slice(0, Math.max(25, Math.round(g.cells.length * g.cellAc / 4)));
   kept.forEach((d, k) => d.label = 'D' + (k + 1));
   return kept;
 }
@@ -303,7 +303,7 @@ function findWetAreas(g, pct) {
     }
     out.push({ members, low, cx: sx / members.length, cy: sy / members.length, areaAc: members.length * g.cellAc });
   }
-  const kept = out.filter(a => a.areaAc >= 0.4).sort((a, b) => b.areaAc - a.areaAc).slice(0, 8);
+  const kept = out.filter(a => a.areaAc >= 0.4).sort((a, b) => b.areaAc - a.areaAc).slice(0, Math.max(8, Math.round(g.cells.length * g.cellAc / 20)));
   kept.forEach((a, k) => {
     a.label = 'P' + (k + 1);
     let best = a.members[0], bd = 1e18;
