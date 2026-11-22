@@ -1,6 +1,6 @@
-// Field Flow service worker: app files cached for fast launch and updated from the network; map tiles stay live.
-const SHELL = 'fieldflow-v3';
-const FILES = ['./', 'index.html', 'app.js?v=3', 'engine.js?v=3', 'pdf-lib.min.js', 'vendor/maplibre-gl.js', 'vendor/maplibre-gl.css',
+// AcreFlow service worker: app files cached for fast launch and updated from the network; map tiles stay live.
+const SHELL = 'acreflow-v4';
+const FILES = ['./', 'index.html', 'app.js?v=4', 'engine.js?v=4', 'pdf-lib.min.js', 'vendor/maplibre-gl.js', 'vendor/maplibre-gl.css',
   'manifest.json', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(SHELL).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {

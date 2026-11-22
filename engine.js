@@ -1,4 +1,4 @@
-/* Field Flow engine: terrain analysis, dirt-work items, plan drawing, PDF + KML.
+/* AcreFlow engine: terrain analysis, dirt-work items, plan drawing, PDF + KML.
    No map dependency, so it can be tested on its own. */
 (function (global) {
 'use strict';
@@ -636,7 +636,7 @@ async function buildPDF(g, opts) {
   for (const n of NOTES) { text('- ' + n, MG, font, 9, mute); y -= 3; }
 
   const pages = doc.getPages();
-  pages.forEach((p, j) => p.drawText(san(`${name} - dirt work recommendations - page ${j + 1} of ${pages.length}`), { x: MG, y: 20, size: 8, font, color: mute }));
+  pages.forEach((p, j) => p.drawText(san(`${name} - dirt work recommendations - page ${j + 1} of ${pages.length} - made with AcreFlow`), { x: MG, y: 20, size: 8, font, color: mute }));
   return await doc.save();
 }
 

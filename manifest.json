@@ -1,6 +1,6 @@
 {
-  "name": "Field Flow — Terrain & Water",
-  "short_name": "Field Flow",
+  "name": "AcreFlow — Terrain & Water",
+  "short_name": "AcreFlow",
   "description": "Draw a field, see it in 3D, and watch where rainfall runs and ponds.",
   "start_url": "./",
   "scope": "./",

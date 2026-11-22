@@ -1,7 +1,7 @@
-/* Field Flow app: map, field drawing, overlays, rain, dirt work plan, report export. */
+/* AcreFlow app: map, field drawing, overlays, rain, dirt work plan, report export. */
 {
 'use strict';
-const VERSION = '3';
+const VERSION = '4';
 const $ = id => document.getElementById(id);
 const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
 const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
@@ -9,7 +9,7 @@ const E = FieldEngine, { FT, ACRE, rampColor, ELEV_RAMP } = E;
 
 const store = { get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
 const saved = store.get('ftf-view');
-$('ver').textContent = 'Field Flow v' + VERSION;
+$('ver').textContent = 'AcreFlow v' + VERSION;
 
 const map = new maplibregl.Map({
   container: 'map',
@@ -597,7 +597,7 @@ const standalone = matchMedia('(display-mode: standalone)').matches || navigator
 const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
 let deferred = null;
 const showInstall = (msg, btn) => { if (standalone || store.get('ftf-noinstall')) return; $('installMsg').textContent = msg; $('installBtn').classList.toggle('hide', !btn); $('install').classList.remove('hide'); };
-addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferred = e; showInstall('Install Field Flow on your home screen.', true); });
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferred = e; showInstall('Install AcreFlow on your home screen.', true); });
 $('installBtn').onclick = async () => { if (!deferred) return; deferred.prompt(); await deferred.userChoice.catch(() => {}); deferred = null; $('install').classList.add('hide'); };
 $('installX').onclick = () => { $('install').classList.add('hide'); store.set('ftf-noinstall', 1); };
 if (isIOS && !standalone) showInstall('To install: tap Share, then “Add to Home Screen.”', false);
