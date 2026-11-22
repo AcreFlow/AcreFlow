@@ -1,7 +1,7 @@
 /* AcreFlow app: map, field drawing, overlays, rain, dirt work plan, report export. */
 {
 'use strict';
-const VERSION = '7';
+const VERSION = '8';
 const $ = id => document.getElementById(id);
 const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
 const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';

@@ -255,6 +255,19 @@ function checkWaterways(g, img) {
     return Math.sqrt(Math.max(0, s2 / 49 - (s / 49) * (s / 49)));
   };
   const stride = Math.max(1, Math.round(8 / cs)), h = Math.max(2, Math.round(15 / cs));
+  // what ordinary ground in this field looks like: typical roughness and brightness over a spread of field cells
+  const rawLum = (gx, gy) => { const px = Math.round(gx * k), py = Math.round(gy * k); if (px < 0 || py < 0 || px >= iw || py >= ih) return null; const o = (py * iw + px) * 4; return (data[o] + data[o + 1] + data[o + 2]) / 3; };
+  const rs = [], ls = [], stepN = Math.max(1, Math.floor(g.cells.length / 1500));
+  for (let q = 0; q < g.cells.length; q += stepN) { const p = cxy(g, g.cells[q]), r = rough(p[0], p[1]), l = rawLum(p[0], p[1]); if (r != null && l != null) { rs.push(r); ls.push(l); } }
+  rs.sort((a, b) => a - b); ls.sort((a, b) => a - b);
+  const medR = rs.length ? rs[rs.length >> 1] : 6, medL = ls.length ? ls[ls.length >> 1] : 120;
+  const treeR = Math.max(10, 2.2 * medR);
+  // trees judged on their own look (rough canopy, no brighter than the field), so a draw deep inside timber still counts
+  const woods = (c, nx, ny) => {
+    let hit = 0, n = 0;
+    for (let t = -18; t <= 18; t += 6) { const gx = c[0] + nx * t / cs, gy = c[1] + ny * t / cs, r = rough(gx, gy), l = rawLum(gx, gy); if (r == null || l == null) continue; n++; if (r > treeR && l < medL + 8) hit++; }
+    return n >= 3 && hit / n >= 0.4;
+  };
 
   for (const w of g.waterways) {
     let total = 0, checked = 0, grass = 0, wood = 0;
@@ -275,7 +288,8 @@ function checkWaterways(g, img) {
           if (!best || con > best.con) best = { con, C, FL, FR, jc };
         }
         let flag = 0;
-        if (best) {
+        if (woods(c, nx, ny)) flag = 3;
+        else if (best) {
           const { C, FL, FR, jc } = best;
           const noise = ((FL ? spread(tr, jc - 22, jc - 9, FL) : 0) + (FR ? spread(tr, jc + 9, jc + 22, FR) : 0)) / ((FL ? 1 : 0) + (FR ? 1 : 0));
           const F = FL && FR ? [(FL[0] + FR[0]) / 2, (FL[1] + FR[1]) / 2, (FL[2] + FR[2]) / 2] : (FL || FR);
