@@ -415,13 +415,12 @@ function checkWaterways(g, img) {
   }
 }
 
-/* owner overrides: waterways 'existing' | 'wooded' | 'needs' | 'skip'; low spots 'tile' | 'fill' | 'drain' | 'skip' */
+/* owner overrides: waterways 'existing' | 'wooded' | 'needs' | 'skip'; low spots 'tile' | 'drain' (shaping) | 'skip' */
 function wwStatus(w, o) { return o === 'existing' || o === 'wooded' ? o : o === 'needs' ? 'none' : (w.check ? w.check.status : 'unchecked'); }
 const noWork = st => st === 'existing' || st === 'wooded';
 function lowMethod(d, o) {
-  if (o === 'tile' || o === 'fill' || o === 'drain') return o;
-  if (d.maxFt < 0.3 && d.volCY < 150) return 'fill';
-  if (d.drainFt <= 100 && d.maxFt <= 0.5) return 'drain';
+  if (o === 'tile' || o === 'drain') return o;
+  if (d.drainFt <= 150 && d.maxFt <= 0.5) return 'drain';     // shallow, with free drainage close by: shape it
   return 'tile';
 }
 // cells to draw for a waterway that needs work; paths kicked out for grass or trees draw nothing
@@ -604,8 +603,7 @@ function tileText(d) {
   if (t.lateralFt) s += `Optional: about ${f0(t.lateralFt)} ft of 4-inch laterals at roughly ${t.spacing}-ft spacing across the wet area` + (t.unit ? ` (soil here is ${soilLabel(t.unit)}, ${soilTraits(t.unit)}).` : ' (40 to 80 ft depending on soil).');
   return s.trim();
 }
-const fillText = d => `About ${f0(d.volCY)} cubic yards brings the low spot up to its spill elevation (about ${f0(d.spillElevFt)} ft). Strip and stockpile topsoil, place fill in lifts, replace the topsoil and blend into the surrounding grade so it sheds water.`;
-const drainText = d => `Cut a shallow, wide surface drain about ${f0(d.drainFt)} ft long from the low point (cut up to ${f1(d.maxFt)} ft) to where water runs free at ${fll(d.exitLL)}.`;
+const drainText = d => `Shape the ground so this spot drains on its own: cut a shallow, wide swale about ${f0(d.drainFt)} ft long from the low point (cut up to ${f1(d.maxFt)} ft at the rim) to where water runs free at ${fll(d.exitLL)}. Keep the side slopes flat enough to farm across, spread the cut soil thin on nearby ground, and put the topsoil back.`;
 
 function workItems(g, ov) {
   ov = ov || {};
@@ -613,14 +611,14 @@ function workItems(g, ov) {
   for (const d of g.depressions) {
     if (ov[d.label] === 'skip') continue;
     const m = lowMethod(d, ov[d.label]), t = d.tile;
-    const opts = { tile: ['Tile intake and outlet line', tileText(d)], fill: ['Fill and level', fillText(d)], drain: ['Surface drain', drainText(d)] };
-    const alt = { tile: 'Tile option', fill: 'Fill option', drain: 'Surface drain option' };
+    const opts = { tile: ['Tile intake and outlet line', tileText(d)], drain: ['Shape it to drain', drainText(d)] };
+    const alt = { tile: 'Tile option', drain: 'Shaping option' };
     items.push({
       id: d.label, type: 'low', kind: 'Low spot that ponds water', where: fll(d.pitLL), method: m,
-      size: `${f1(d.areaAc)} ac, up to ${f1(d.maxFt)} ft deep, about ${f0(d.volCY)} CY of ponding space; ${f1(d.wsAc)} ac drain to it` + (t.unit ? `; soil: ${soilLabel(t.unit)}, ${soilTraits(t.unit)}` : ''),
+      size: `${f1(d.areaAc)} ac, up to ${f1(d.maxFt)} ft deep; ${f1(d.wsAc)} ac drain to it` + (t.unit ? `; soil: ${soilLabel(t.unit)}, ${soilTraits(t.unit)}` : ''),
       recTitle: opts[m][0], rec: opts[m][1],
-      more: ['tile', 'fill', 'drain'].filter(x => x !== m).map(x => [alt[x], opts[x][1]]),
-      short: m === 'tile' ? `Tile: ${t.size ? t.size + '-in' : 'intake'}${t.lenFt >= 20 ? ', ' + f0(t.lenFt) + ' ft to outlet' : ''}` : m === 'fill' ? `Fill: about ${f0(d.volCY)} CY` : `Surface drain: ${f0(d.drainFt)} ft`,
+      more: ['tile', 'drain'].filter(x => x !== m).map(x => [alt[x], opts[x][1]]),
+      short: m === 'tile' ? `Tile: ${t.size ? t.size + '-in' : 'intake'}${t.lenFt >= 20 ? ', ' + f0(t.lenFt) + ' ft to outlet' : ''}` : `Shape to drain: ${f0(d.drainFt)} ft swale`,
       line: `${f1(d.areaAc)} ac, ${f1(d.maxFt)} ft deep`
     });
   }
@@ -683,11 +681,10 @@ function summaryLines(g, ov) {
   ov = ov || {};
   const items = workItems(g, ov), lows = items.filter(i => i.type === 'low'), wws = items.filter(i => i.type === 'ww');
   const dep = id => g.depressions.find(d => d.label === id), way = id => g.waterways.find(w => w.label === id);
-  const tiled = lows.filter(i => i.method === 'tile'), filled = lows.filter(i => i.method === 'fill'), drained = lows.filter(i => i.method === 'drain');
+  const tiled = lows.filter(i => i.method === 'tile'), drained = lows.filter(i => i.method === 'drain');
   const parts = [];
   if (tiled.length) parts.push(`${tiled.length} to tile (about ${f0(tiled.reduce((t, i) => t + dep(i.id).tile.lenFt, 0))} ft of main)`);
-  if (filled.length) parts.push(`${filled.length} to fill (about ${f0(filled.reduce((t, i) => t + dep(i.id).volCY, 0))} CY)`);
-  if (drained.length) parts.push(`${drained.length} to surface drain`);
+  if (drained.length) parts.push(`${drained.length} to shape so ${drained.length > 1 ? 'they drain' : 'it drains'}`);
   const exist = wws.filter(i => i.existing), need = wws.filter(i => !i.existing);
   const needFt = need.reduce((t, i) => { return t + way(i.id).lenFt; }, 0);
   const mains = items.filter(i => i.type === 'main'), wets = items.filter(i => i.type === 'wet'), tp = [];
@@ -714,8 +711,7 @@ const NOTES = [
   'A flow path is dropped from the waterway list when the aerial photo shows grass or trees along it. The photo may be a year or more old and can be fooled by crop color, so confirm on the ground.',
   'Pattern-tile areas (P#) are the poorly drained soils from the USDA soil survey (SSURGO) when it loads, otherwise the flattest, most water-collecting ground by terrain. Tile mains (T#) follow the draws. Lateral spacing is a typical figure by hydrologic soil group (A 120 ft, B 90, C 70, D 50). None of this accounts for tile already in the ground.',
   'Tile sizes use Manning\'s equation for corrugated plastic tile flowing full, with a drainage coefficient of 1/2 inch per day over the watershed feeding each intake. Final size, grade, depth and outlet are the contractor\'s design. Existing tile is not mapped here; locate it first, since tying into a nearby main is often cheaper than a new outlet.',
-  'Before draining or filling any low spot, check with the county FSA/NRCS office (form AD-1026). Draining a wetland without a determination can cost USDA program eligibility.',
-  'Fill volumes are the space below each low spot\'s spill elevation. They are a ceiling: a partial fill or a drain often fixes the problem with less dirt.',
+  'Before draining or reshaping any low spot, check with the county FSA/NRCS office (form AD-1026). Draining a wetland without a determination can cost USDA program eligibility.',
   'Do not divert or concentrate water onto a neighbor\'s land beyond its natural flow. Grassed waterways are often eligible for cost share (for example EQIP); ask the county SWCD/NRCS office.',
   'Call 811 (JULIE in Illinois) before any digging.',
   'Coordinates are latitude, longitude (WGS84). The KML file from the app loads these items into Google Earth or most GPS and guidance software.'

@@ -1,7 +1,7 @@
 /* AcreFlow app: map, field drawing, overlays, rain, dirt work plan, report export. */
 {
 'use strict';
-const VERSION = '10';
+const VERSION = '11';
 const $ = id => document.getElementById(id);
 const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
 const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
@@ -198,6 +198,7 @@ function polyAcres(poly) {
 function setField(poly, save) {
   field = poly; if (save) store.set('ftf-field', poly);
   const o = store.get('ftf-ov'); ov = o && o.sig === fieldSig() ? o.ov : {};
+  for (const k2 of Object.keys(ov)) if (ov[k2] === 'fill') delete ov[k2];
   const ring = [...poly, poly[0]];
   map.getSource('field').setData(fc([{ type: 'Feature', geometry: { type: 'Polygon', coordinates: [ring] } }]));
   map.getSource('mask').setData(fc([{ type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]], ring.slice().reverse()] } }]));
@@ -459,9 +460,9 @@ function refreshPlan() {
     const opt = (v, t) => `<option value="${v}"${cur === v ? ' selected' : ''}>${esc(t)}</option>`;
     let sel, cls, line;
     if (a.type === 'low') {
-      const d = a.o, auto = { tile: 'tile it', fill: 'fill it', drain: 'surface drain' }[E.lowMethod(d, null)];
+      const d = a.o, auto = { tile: 'tile it', drain: 'shape it to drain' }[E.lowMethod(d, null)];
       cls = 'low'; line = `${d.areaAc.toFixed(1)} ac, up to ${d.maxFt.toFixed(1)} ft deep`;
-      sel = opt('auto', `Recommended: ${auto}`) + opt('tile', 'Tile it') + opt('fill', 'Fill it') + opt('drain', 'Surface drain') + opt('skip', 'Leave out of the report');
+      sel = opt('auto', `Recommended: ${auto}`) + opt('tile', 'Tile it') + opt('drain', 'Shape it to drain') + opt('skip', 'Leave out of the report');
     } else if (a.type === 'wet' || a.type === 'main') {
       cls = 'tile'; line = a.type === 'wet' ? (a.o.unit ? `${a.o.areaAc.toFixed(1)} ac, ${a.o.unit.muname.split(',')[0]}` : `${a.o.areaAc.toFixed(1)} ac of wet-lying ground`) : `along ${a.o.label}, ${a.o.drainAc.toFixed(1)} ac drain toward it`;
       sel = opt('auto', 'Include in the report') + opt('skip', 'Leave out of the report');
