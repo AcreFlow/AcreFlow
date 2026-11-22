@@ -1,7 +1,7 @@
 /* AcreFlow app: map, field drawing, overlays, rain, dirt work plan, report export. */
 {
 'use strict';
-const VERSION = '12';
+const VERSION = '13';
 const $ = id => document.getElementById(id);
 const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
 const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
@@ -42,6 +42,7 @@ map.on('load', foldAttribution); setTimeout(foldAttribution, 2000);
 map.on('moveend', () => store.set('ftf-view', { c: map.getCenter().toArray(), z: map.getZoom() }));
 
 /* ---------- state ---------- */
+let prodState = 'none';
 let mode = 'idle', pts = [], vtxMarkers = [], field = null, grid = null, ov = {}, photo = 'none', soilState = 'none';
 let tune = Object.assign({}, E.DEFAULT_TUNE, store.get('ftf-tune') || {});
 const fc = f => ({ type: 'FeatureCollection', features: f });
@@ -305,6 +306,8 @@ async function analyze(poly) {
     soilState = soil ? 'done' : 'failed';
     if (soil) { E.applySoils(g, soil); ov = Object.fromEntries(Object.entries(ov).filter(([k2]) => k2[0] !== 'P')); refreshPlan(); buildSoilOverlay(); }
     showSoils();
+    if (soil) loadProd(soil.units).then(() => { if (id !== runId) return; prodState = 'done'; pdfCache = null; buildProdOverlay(); showProd(); showSoils(); });
+    else { prodState = 'failed'; showProd(); }
   });
 
   // aerial photo: used to spot waterways that are already grassed, and as the report's second map
@@ -340,6 +343,69 @@ async function loadSoils(g, lo, hi) {
     return { units, cellUnit: E.rasterizeSoils(g.W, g.H, polys) };
   } catch (e) { return null; }
 }
+// productivity ratings per soil: two separate queries so one failing (e.g. no Illinois PI outside Illinois) does not lose the other
+async function sda(q) {
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 25000);
+  try {
+    const r = await fetch(SDA, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'format=JSON%2BCOLUMNNAME&query=' + encodeURIComponent(q), signal: ctl.signal });
+    const j = await r.json(), rows = (j && j.Table) || [];
+    if (rows.length < 2) return [];
+    const col = rows[0].map(n => String(n).toLowerCase());
+    return rows.slice(1).map(row => Object.fromEntries(col.map((n, k2) => [n, row[k2]])));
+  } catch (e) { return []; } finally { clearTimeout(timer); }
+}
+async function loadProd(units) {
+  const keys = units.map(u => "'" + String(u.mukey).replace(/[^0-9]/g, '') + "'").join(',');
+  if (!keys) return;
+  const comps = `from component c where c.mukey in (${keys}) and c.comppct_r > 0`;
+  const [nc, il] = await Promise.all([
+    sda(`select c.mukey, c.comppct_r, (select max(ci.interphr) from cointerp ci where ci.cokey = c.cokey and ci.ruledepth = 0 and ci.mrulename like 'NCCPI - National Commodity Crop Productivity Index%') as nccpi ${comps}`),
+    sda(`select c.mukey, c.comppct_r, (select max(y.cropprodindex) from cocropyld y where y.cokey = c.cokey) as pi, ` +
+        `(select max(y.nonirryield_r) from cocropyld y where y.cokey = c.cokey and y.cropname = 'Corn') as corn, ` +
+        `(select max(y.nonirryield_r) from cocropyld y where y.cokey = c.cokey and y.cropname = 'Soybeans') as soy ${comps}`)
+  ]);
+  // weight each rating by component percent, over the components that have one
+  const agg = (rows, key) => {
+    const m = new Map();
+    for (const r of rows) { const v = parseFloat(r[key]), w = parseFloat(r.comppct_r); if (!isFinite(v) || !isFinite(w) || w <= 0) continue; const k2 = String(r.mukey), o = m.get(k2) || { s: 0, w: 0 }; o.s += v * w; o.w += w; m.set(k2, o); }
+    return m;
+  };
+  const maps = { nccpi: agg(nc, 'nccpi'), pi: agg(il, 'pi'), corn: agg(il, 'corn'), soy: agg(il, 'soy') };
+  for (const u of units) for (const k2 of Object.keys(maps)) { const o = maps[k2].get(String(u.mukey)); u[k2] = o && o.w > 0 ? o.s / o.w : null; }
+}
+const prodKey = () => $('prodMetric').value;
+function prodColor(t) {        // red (low) -> yellow -> green (high)
+  t = Math.max(0, Math.min(1, t));
+  const s = [[0, [200, 50, 40]], [.5, [235, 205, 70]], [1, [40, 150, 60]]];
+  for (let k2 = 1; k2 < s.length; k2++) if (t <= s[k2][0]) { const a0 = s[k2 - 1], b0 = s[k2], f = (t - a0[0]) / (b0[0] - a0[0]); return a0[1].map((v, j) => Math.round(v + (b0[1][j] - v) * f)); }
+  return s[2][1];
+}
+function buildProdOverlay() {
+  if (!grid || !grid.soil) return;
+  const key = prodKey(), P = E.PROD[key], s = grid.soil, W = grid.W;
+  const col = s.units.map(u => u[key] == null ? null : prodColor((u[key] - P.lo) / (P.hi - P.lo)));
+  const url = makeImage(i => {
+    const k2 = s.cellUnit[i]; if (k2 < 0 || !col[k2]) return null;
+    const x = i % W, edge = (x + 1 < W && s.cellUnit[i + 1] !== k2) || (i + W < s.cellUnit.length && s.cellUnit[i + W] !== k2);
+    return edge ? [20, 30, 20, 230] : [col[k2][0], col[k2][1], col[k2][2], 170];
+  });
+  if (map.getSource('ov-prod')) map.getSource('ov-prod').updateImage({ url, coordinates: grid.coords });
+  else { map.addSource('ov-prod', { type: 'image', url, coordinates: grid.coords }); map.addLayer({ id: 'ov-prod', type: 'raster', source: 'ov-prod', layout: { visibility: $('tProd').checked ? 'visible' : 'none' }, paint: { 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, 'mask'); }
+}
+function showProd() {
+  const on = $('tProd').checked, box = $('prodBox');
+  box.classList.toggle('hide', !on);
+  if (!on) return;
+  const msg = t => { $('prodList').innerHTML = `<p class="hint" style="font-size:13px">${t}</p>`; };
+  if (soilState === 'failed') return msg('The USDA soil survey did not load, so productivity is not available.');
+  if (prodState !== 'done' || !grid || !grid.soil) return msg('Loading productivity ratings…');
+  const key = prodKey(), P = E.PROD[key], avg = E.prodAvg(grid, key);
+  $('prodLo').textContent = P.fmt(P.lo); $('prodHi').textContent = P.fmt(P.hi);
+  if (!avg) return msg(`No ${P.label} ratings for these soils.` + (key === 'pi' ? ' The Illinois PI is only rated for Illinois soils.' : ''));
+  const rows = E.soilRows(grid).filter(u => u[key] != null).sort((a0, b0) => b0[key] - a0[key]);
+  $('prodList').innerHTML = `<div class="prod-avg"><b>${P.fmt(avg.v)}</b><span>${esc(P.long)}, acre-weighted field average${avg.share < .95 ? ` (${Math.round(avg.share * 100)}% of the field rated)` : ''}</span></div>` +
+    rows.map(u => { const c = prodColor((u[key] - P.lo) / (P.hi - P.lo)); return `<div class="soil"><i style="background:rgb(${c})"></i><div><b>${esc(P.fmt(u[key]))}</b> ${esc(u.musym)} ${esc(u.muname)}<small>${u.acres.toFixed(1)} ac (${Math.round(u.acres / grid.fieldAc * 100)}%)</small></div></div>`; }).join('');
+}
 function buildSoilOverlay() {
   if (!grid || !grid.soil) return;
   const s = grid.soil, rgb = s.units.map(u => { const h = drainColor(u); return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; });
@@ -356,7 +422,7 @@ function showSoils() {
   box.classList.toggle('hide', !on);
   if (!on) return;
   if (soilState !== 'done' || !grid || !grid.soil) { box.innerHTML = `<p class="hint" style="font-size:13px">${soilState === 'loading' ? 'Loading the USDA soil survey…' : soilState === 'failed' ? 'The USDA soil survey did not load. Tile recommendations are using terrain only.' : ''}</p>`; return; }
-  box.innerHTML = E.soilRows(grid).map(u => `<div class="soil"><i style="background:${drainColor(u)}"></i><div><b>${esc(u.musym)}</b> ${esc(u.muname)}<small>${u.acres.toFixed(1)} ac (${Math.round(u.acres / grid.fieldAc * 100)}%) · ${esc(u.drain ? u.drain.toLowerCase() : 'no drainage rating')}${u.hydgrp ? ' · group ' + esc(u.hydgrp) : ''}</small></div></div>`).join('');
+  box.innerHTML = E.soilRows(grid).map(u => `<div class="soil"><i style="background:${drainColor(u)}"></i><div><b>${esc(u.musym)}</b> ${esc(u.muname)}<small>${u.acres.toFixed(1)} ac (${Math.round(u.acres / grid.fieldAc * 100)}%) · ${esc(u.drain ? u.drain.toLowerCase() : 'no drainage rating')}${u.hydgrp ? ' · group ' + esc(u.hydgrp) : ''}${u.pi != null ? ' · PI ' + Math.round(u.pi) : ''}</small></div></div>`).join('');
 }
 function setStatus(t) { $('status').textContent = t; $('status').classList.toggle('hide', !t); }
 
@@ -387,9 +453,9 @@ function buildOverlays() {
 function clearAnalysis() {
   runId++;
   stopRainLoop(); clearRainCanvas();
-  ['ov-soil', 'ov-wet', 'ov-pond', 'ov-chan', 'ov-elev'].forEach(id => { if (map.getLayer(id)) map.removeLayer(id); if (map.getSource(id)) map.removeSource(id); });
+  ['ov-prod', 'ov-soil', 'ov-wet', 'ov-pond', 'ov-chan', 'ov-elev'].forEach(id => { if (map.getLayer(id)) map.removeLayer(id); if (map.getSource(id)) map.removeSource(id); });
   if (map.getSource('plan')) map.getSource('plan').setData(empty);
-  grid = null; R = null; LAT = null; pdfCache = null; photo = 'none'; soilState = 'none';
+  grid = null; R = null; LAT = null; pdfCache = null; photo = 'none'; soilState = 'none'; prodState = 'none';
   $('stats').innerHTML = ''; $('items').innerHTML = ''; $('itemsHint').textContent = ''; $('reportMsg').textContent = '';
   $('tabWork').textContent = 'Dirt work';
   $('pdfBtn').disabled = true; $('kmlBtn').disabled = true;
@@ -630,6 +696,9 @@ $('chanThr').oninput = () => { $('chanOut').textContent = $('chanThr').value; };
 $('chanThr').onchange = () => { if (grid && map.getSource('ov-chan')) map.getSource('ov-chan').updateImage({ url: chanImage(), coordinates: grid.coords }); };
 $('tPond').onchange = () => vis('ov-pond', $('tPond').checked);
 $('tSoil').onchange = () => { vis('ov-soil', $('tSoil').checked); showSoils(); };
+$('tProd').onchange = () => { vis('ov-prod', $('tProd').checked); showProd(); };
+$('prodMetric').value = store.get('ftf-prod') || 'pi';
+$('prodMetric').onchange = () => { store.set('ftf-prod', prodKey()); buildProdOverlay(); showProd(); };
 $('tElev').onchange = () => { vis('ov-elev', $('tElev').checked); $('legend').classList.toggle('hide', !$('tElev').checked); };
 $('tRoads').onchange = () => { vis('roads', $('tRoads').checked); vis('places', $('tRoads').checked); };
 

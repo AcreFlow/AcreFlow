@@ -239,6 +239,19 @@ function spacingFor(u) { const h = u && u.hydgrp ? u.hydgrp.charAt(0).toUpperCas
 const soilLabel = u => `${u.muname}${u.musym ? ' (' + u.musym + ')' : ''}`;
 const soilTraits = u => [u.drain ? u.drain.toLowerCase() : null, u.hydgrp ? 'hydrologic group ' + u.hydgrp : null].filter(Boolean).join(', ');
 function unitAt(g, cell) { const s = g.soil; if (!s) return null; const k = s.cellUnit[cell]; return k >= 0 ? s.units[k] : null; }
+/* productivity: per soil unit u.pi (Illinois B811 optimum PI), u.nccpi (0-1), u.corn, u.soy (bu/ac); weighted by acres in the field */
+const PROD = {
+  pi:    { label: 'Illinois PI', long: 'Illinois productivity index (Bulletin 811)', lo: 80, hi: 147, fmt: v => Math.round(v) + '' },
+  nccpi: { label: 'NCCPI', long: 'National Commodity Crop Productivity Index', lo: 0.2, hi: 1, fmt: v => v.toFixed(2) },
+  corn:  { label: 'Corn yield', long: 'Soil survey corn yield rating', lo: 100, hi: 230, fmt: v => Math.round(v) + ' bu' },
+  soy:   { label: 'Soybean yield', long: 'Soil survey soybean yield rating', lo: 30, hi: 70, fmt: v => Math.round(v) + ' bu' }
+};
+function prodAvg(g, key) {
+  if (!g.soil) return null; let s = 0, a = 0;
+  for (const u of g.soil.units) if (u[key] != null && u.acres > 0) { s += u[key] * u.acres; a += u.acres; }
+  return a > 0 ? { v: s / a, share: a / g.fieldAc } : null;
+}
+const prodLine = u => Object.keys(PROD).filter(k => u[k] != null).map(k => `${PROD[k].label} ${PROD[k].fmt(u[k])}`).join(', ');
 function applySoils(g, soil) {
   g.soil = soil || null;
   if (soil) { soil.units.forEach(u => { u.acres = 0; }); for (const i of g.cells) { const k = soil.cellUnit[i]; if (k >= 0) soil.units[k].acres += g.cellAc; } }
@@ -702,6 +715,7 @@ function summaryLines(g, ov) {
     ['Tile', tileLine || 'None recommended'],
     ['Waterways', need.length ? wp.join('; ') : 'None to build'],
     ['Main outlet', `${fll(ll(g, g.outlet))}, drains ${f0(g.outletAc)} ac`],
+    ...(g.soil && Object.keys(PROD).some(k => prodAvg(g, k)) ? [['Productivity', Object.keys(PROD).map(k => { const p = prodAvg(g, k); return p ? `${PROD[k].label} ${PROD[k].fmt(p.v)}` : null; }).filter(Boolean).join('; ') + ' (acre-weighted)']] : []),
     ...(g.soil ? [['Soils', soilRows(g).slice(0, 3).map(u => `${u.muname} ${Math.round(u.acres / g.fieldAc * 100)}%`).join('; ') || 'No soil survey data here']] : [])
   ];
 }
@@ -714,6 +728,7 @@ const NOTES = [
   'Before draining or reshaping any low spot, check with the county FSA/NRCS office (form AD-1026). Draining a wetland without a determination can cost USDA program eligibility.',
   'Do not divert or concentrate water onto a neighbor\'s land beyond its natural flow. Grassed waterways are often eligible for cost share (for example EQIP); ask the county SWCD/NRCS office.',
   'Call 811 (JULIE in Illinois) before any digging.',
+  'Productivity figures come from the USDA soil survey: the Illinois productivity index (University of Illinois Bulletin 811, optimum management), the NRCS National Commodity Crop Productivity Index (NCCPI), and the survey\'s corn and soybean yield ratings. Field averages are weighted by acres of each soil and are not adjusted for slope, erosion or drainage improvements.',
   'Coordinates are latitude, longitude (WGS84). The KML file from the app loads these items into Google Earth or most GPS and guidance software.'
 ];
 
@@ -799,7 +814,7 @@ async function buildPDF(g, opts) {
   if (g.soil && soilRows(g).length) {
     if (y < MG + 110) newPage();
     text('Soils in this field (USDA soil survey)', MG, bold, 12); y -= 2;
-    for (const u of soilRows(g)) { labeled(`${u.musym || '-'}  ${u.muname}:`, `${f1(u.acres)} ac (${Math.round(u.acres / g.fieldAc * 100)}%). ${soilTraits(u) || 'no drainage rating'}${u.hydric ? ', ' + u.hydric + '% hydric' : ''}. Typical lateral spacing ${spacingFor(u)} ft.`, MG, 9.5); y -= 2; }
+    for (const u of soilRows(g)) { labeled(`${u.musym || '-'}  ${u.muname}:`, `${f1(u.acres)} ac (${Math.round(u.acres / g.fieldAc * 100)}%). ${soilTraits(u) || 'no drainage rating'}${u.hydric ? ', ' + u.hydric + '% hydric' : ''}.${prodLine(u) ? ' ' + prodLine(u) + '.' : ''} Typical lateral spacing ${spacingFor(u)} ft.`, MG, 9.5); y -= 2; }
     y -= 8;
   }
   if (opts.notes) { if (y < MG + 80) newPage(); text('Owner notes', MG, bold, 12); y -= 2; text(opts.notes, MG, font, 10); y -= 8; }
@@ -852,6 +867,6 @@ function buildKML(g, name, ov) {
 ${pm}</Document></kml>`;
 }
 
-global.FieldEngine = { applySoils, rasterizeSoils, parseWktPolygons, drainRank, spacingFor, soilRows, analyzeGrid, retune, WW_LEVELS, LOW_LEVELS, DEFAULT_TUNE, checkWaterways, wwStatus, lowMethod, waterwayRuns, chaikin, cellLL: ll, drawPlan, buildPDF, buildKML,
+global.FieldEngine = { PROD, prodAvg, prodLine, applySoils, rasterizeSoils, parseWktPolygons, drainRank, spacingFor, soilRows, analyzeGrid, retune, WW_LEVELS, LOW_LEVELS, DEFAULT_TUNE, checkWaterways, wwStatus, lowMethod, waterwayRuns, chaikin, cellLL: ll, drawPlan, buildPDF, buildKML,
   workItems, summaryLines, mainOn, noWork, rampColor, ELEV_RAMP, FT, ACRE, POND_M };
 })(window);

@@ -96,6 +96,8 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
 .item-r{margin:8px 0;font-size:14px}
 .item select{width:100%;height:44px;border-radius:10px;border:1px solid var(--line);background:#232a24;padding:0 10px;font-size:16px}
 .soil{display:flex;gap:10px;align-items:flex-start;padding:5px 0;font-size:14px}.soil i{flex:none;width:16px;height:16px;border-radius:4px;margin-top:2px}.soil small{display:block;color:var(--mute);font-size:13px}
+.pick{width:100%;height:44px;border-radius:10px;border:1px solid var(--line);background:#232a24;padding:0 10px;font-size:16px;margin:4px 0 2px}
+.prod-avg{display:flex;gap:12px;align-items:center;background:rgba(255,255,255,.05);border-radius:10px;padding:8px 10px;margin:6px 0}.prod-avg b{font-size:24px;white-space:nowrap}.prod-avg span{color:var(--mute);font-size:13px;line-height:1.25}
 .key{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--mute);margin-top:8px}
 .key i{display:inline-block;width:18px;height:4px;border-radius:2px;vertical-align:middle;margin-right:5px}
 .hide{display:none!important}
@@ -163,6 +165,12 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
             <div class="tog"><label for="tChan">Flow paths<small>Where runoff concentrates</small></label><input type="checkbox" class="sw r" id="tChan"></div>
             <div class="slider hide" id="chanWrap"><span>Detail</span><input type="range" id="chanThr" min="1" max="9" step="1" value="5" aria-label="Flow path detail"><output id="chanOut">5</output></div>
             <div class="tog"><label for="tPond">Ponding spots<small>Low spots with no way out</small></label><input type="checkbox" class="sw r" id="tPond"></div>
+            <div class="tog"><label for="tProd">Productivity<small>Soil productivity index by soil type</small></label><input type="checkbox" class="sw" id="tProd"></div>
+            <div id="prodBox" class="hide">
+              <select id="prodMetric" class="pick" aria-label="Productivity measure"><option value="pi">Illinois PI (Bulletin 811)</option><option value="nccpi">NCCPI (national, 0 to 1)</option><option value="corn">Corn yield rating</option><option value="soy">Soybean yield rating</option></select>
+              <div class="legend" style="background:linear-gradient(90deg,rgb(200,50,40),rgb(235,205,70),rgb(40,150,60))"></div><div class="legend-l"><span id="prodLo"></span><span id="prodHi"></span></div>
+              <div id="prodList"></div>
+            </div>
             <div class="tog"><label for="tSoil">Soil types<small>USDA soil survey, colored by drainage</small></label><input type="checkbox" class="sw" id="tSoil"></div>
             <div id="soilList" class="hide"></div>
             <div class="tog"><label for="tElev">Elevation colors<small>Low to high across the field</small></label><input type="checkbox" class="sw" id="tElev"></div>
@@ -201,7 +209,7 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
 </div>
 
 <script src="vendor/maplibre-gl.js"></script>
-<script src="engine.js?v=12"></script>
-<script src="app.js?v=12"></script>
+<script src="engine.js?v=13"></script>
+<script src="app.js?v=13"></script>
 </body>
 </html>
