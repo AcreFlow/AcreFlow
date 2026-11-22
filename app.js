@@ -1,7 +1,7 @@
 /* AcreFlow app: map, field drawing, overlays, rain, dirt work plan, report export. */
 {
 'use strict';
-const VERSION = '9';
+const VERSION = '10';
 const $ = id => document.getElementById(id);
 const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
 const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
@@ -42,7 +42,7 @@ map.on('load', foldAttribution); setTimeout(foldAttribution, 2000);
 map.on('moveend', () => store.set('ftf-view', { c: map.getCenter().toArray(), z: map.getZoom() }));
 
 /* ---------- state ---------- */
-let mode = 'idle', pts = [], vtxMarkers = [], field = null, grid = null, ov = {}, photo = 'none';
+let mode = 'idle', pts = [], vtxMarkers = [], field = null, grid = null, ov = {}, photo = 'none', soilState = 'none';
 let tune = Object.assign({}, E.DEFAULT_TUNE, store.get('ftf-tune') || {});
 const fc = f => ({ type: 'FeatureCollection', features: f });
 const empty = fc([]);
@@ -297,6 +297,15 @@ async function analyze(poly) {
   $('pdfBtn').disabled = false; $('kmlBtn').disabled = false;
   if (rainOn) startRain();
 
+  // soil survey (USDA SSURGO): drives the pattern-tile areas and lateral spacing
+  soilState = 'loading'; showSoils();
+  loadSoils(g, lo, hi).then(soil => {
+    if (id !== runId) return;
+    soilState = soil ? 'done' : 'failed';
+    if (soil) { E.applySoils(g, soil); ov = Object.fromEntries(Object.entries(ov).filter(([k2]) => k2[0] !== 'P')); refreshPlan(); buildSoilOverlay(); }
+    showSoils();
+  });
+
   // aerial photo: used to spot waterways that are already grassed, and as the report's second map
   const k = Math.pow(2, Math.max(0, Math.min(17 - z, Math.floor(Math.log2(1600 / Math.max(W, H))))));
   let img = null;
@@ -306,6 +315,47 @@ async function analyze(poly) {
   E.checkWaterways(g, img);
   photo = img ? 'done' : 'failed';
   refreshPlan();
+}
+const SDA = 'https://SDMDataAccess.sc.egov.usda.gov/Tabular/post.rest';
+const DRAIN_COLORS = ['#d9b36c', '#d9b36c', '#c9d36a', '#7fc8a9', '#4a90d9', '#2b4fb3'];   // by drainage rank, dry to wet
+const drainColor = u => { const r = E.drainRank(u); return r < 0 ? '#9aa39b' : DRAIN_COLORS[r]; };
+async function loadSoils(g, lo, hi) {
+  try {
+    const ring = [[lo[0], lo[1]], [hi[0], lo[1]], [hi[0], hi[1]], [lo[0], hi[1]], [lo[0], lo[1]]].map(p => p[0].toFixed(6) + ' ' + p[1].toFixed(6)).join(',');
+    const q = `~DeclareGeometry(@aoi)~\nselect @aoi = geometry::STPolyFromText('polygon((${ring}))', 4326)\n~DeclareIdGeomTable(@p)~\n~GetClippedMapunits(@aoi,polygon,geo,@p)~\n` +
+      'select p.id as mukey, p.geom.STAsText() as wkt, m.musym, m.muname, a.drclassdcd, a.hydgrpdcd, a.hydclprs from @p p inner join mapunit m on m.mukey = p.id left join muaggatt a on a.mukey = p.id';
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 25000);
+    const r = await fetch(SDA, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'format=JSON%2BCOLUMNNAME&query=' + encodeURIComponent(q), signal: ctl.signal });
+    clearTimeout(timer);
+    const j = await r.json(), rows = (j && j.Table) || [];
+    if (rows.length < 2) return null;
+    const col = Object.fromEntries(rows[0].map((n, k2) => [String(n).toLowerCase(), k2])), units = [], byKey = new Map(), polys = [];
+    for (const row of rows.slice(1)) {
+      const key = String(row[col.mukey]);
+      if (!byKey.has(key)) { byKey.set(key, units.length); units.push({ mukey: key, musym: row[col.musym] || '', muname: row[col.muname] || 'Unnamed soil', drain: row[col.drclassdcd] || '', hydgrp: row[col.hydgrpdcd] || '', hydric: parseInt(row[col.hydclprs], 10) || 0 }); }
+      for (const rings of E.parseWktPolygons(String(row[col.wkt] || ''))) polys.push({ unit: byKey.get(key), rings: rings.map(rg => rg.map(p => [lngToX(p[0], g.z) - g.x0, latToY(p[1], g.z) - g.y0])) });
+    }
+    if (!polys.length) return null;
+    return { units, cellUnit: E.rasterizeSoils(g.W, g.H, polys) };
+  } catch (e) { return null; }
+}
+function buildSoilOverlay() {
+  if (!grid || !grid.soil) return;
+  const s = grid.soil, rgb = s.units.map(u => { const h = drainColor(u); return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; });
+  const W = grid.W, url = makeImage(i => {
+    const k2 = s.cellUnit[i]; if (k2 < 0) return null;
+    const x = i % W, edge = (x + 1 < W && s.cellUnit[i + 1] !== k2) || (i + W < s.cellUnit.length && s.cellUnit[i + W] !== k2);   // dark line between soils
+    return edge ? [20, 30, 20, 230] : [rgb[k2][0], rgb[k2][1], rgb[k2][2], 150];
+  });
+  if (map.getSource('ov-soil')) map.getSource('ov-soil').updateImage({ url, coordinates: grid.coords });
+  else { map.addSource('ov-soil', { type: 'image', url, coordinates: grid.coords }); map.addLayer({ id: 'ov-soil', type: 'raster', source: 'ov-soil', layout: { visibility: $('tSoil').checked ? 'visible' : 'none' }, paint: { 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, 'ov-elev'); }
+}
+function showSoils() {
+  const on = $('tSoil').checked, box = $('soilList');
+  box.classList.toggle('hide', !on);
+  if (!on) return;
+  if (soilState !== 'done' || !grid || !grid.soil) { box.innerHTML = `<p class="hint" style="font-size:13px">${soilState === 'loading' ? 'Loading the USDA soil survey…' : soilState === 'failed' ? 'The USDA soil survey did not load. Tile recommendations are using terrain only.' : ''}</p>`; return; }
+  box.innerHTML = E.soilRows(grid).map(u => `<div class="soil"><i style="background:${drainColor(u)}"></i><div><b>${esc(u.musym)}</b> ${esc(u.muname)}<small>${u.acres.toFixed(1)} ac (${Math.round(u.acres / grid.fieldAc * 100)}%) · ${esc(u.drain ? u.drain.toLowerCase() : 'no drainage rating')}${u.hydgrp ? ' · group ' + esc(u.hydgrp) : ''}</small></div></div>`).join('');
 }
 function setStatus(t) { $('status').textContent = t; $('status').classList.toggle('hide', !t); }
 
@@ -336,9 +386,9 @@ function buildOverlays() {
 function clearAnalysis() {
   runId++;
   stopRainLoop(); clearRainCanvas();
-  ['ov-wet', 'ov-pond', 'ov-chan', 'ov-elev'].forEach(id => { if (map.getLayer(id)) map.removeLayer(id); if (map.getSource(id)) map.removeSource(id); });
+  ['ov-soil', 'ov-wet', 'ov-pond', 'ov-chan', 'ov-elev'].forEach(id => { if (map.getLayer(id)) map.removeLayer(id); if (map.getSource(id)) map.removeSource(id); });
   if (map.getSource('plan')) map.getSource('plan').setData(empty);
-  grid = null; R = null; LAT = null; pdfCache = null; photo = 'none';
+  grid = null; R = null; LAT = null; pdfCache = null; photo = 'none'; soilState = 'none';
   $('stats').innerHTML = ''; $('items').innerHTML = ''; $('itemsHint').textContent = ''; $('reportMsg').textContent = '';
   $('tabWork').textContent = 'Dirt work';
   $('pdfBtn').disabled = true; $('kmlBtn').disabled = true;
@@ -403,7 +453,7 @@ function refreshPlan() {
   $('itemsHint').textContent = !all.length ? 'No low spots or flow paths big enough to need dirt work showed up at this data resolution.'
     : photo === 'loading' ? 'Checking the aerial photo for grass and trees along the flow paths…'
     : photo === 'failed' ? 'The aerial photo did not load, so existing waterways could not be checked. Set each one yourself below.'
-    : 'Tap Map on an item to see it. Change the choice if you know the ground better than the data does.';
+    : 'Tap Map on an item to see it. Change the choice if you know the ground better than the data does.' + (soilState === 'failed' ? ' The soil survey did not load, so wet ground is judged from terrain only.' : '');
   const isDone = x => !!(byId[x.id] && byId[x.id].existing), card = a => {
     const it = byId[a.id], cur = ov[a.id] || 'auto';
     const opt = (v, t) => `<option value="${v}"${cur === v ? ' selected' : ''}>${esc(t)}</option>`;
@@ -413,7 +463,7 @@ function refreshPlan() {
       cls = 'low'; line = `${d.areaAc.toFixed(1)} ac, up to ${d.maxFt.toFixed(1)} ft deep`;
       sel = opt('auto', `Recommended: ${auto}`) + opt('tile', 'Tile it') + opt('fill', 'Fill it') + opt('drain', 'Surface drain') + opt('skip', 'Leave out of the report');
     } else if (a.type === 'wet' || a.type === 'main') {
-      cls = 'tile'; line = a.type === 'wet' ? `${a.o.areaAc.toFixed(1)} ac of wet-lying ground` : `along ${a.o.label}, ${a.o.drainAc.toFixed(1)} ac drain toward it`;
+      cls = 'tile'; line = a.type === 'wet' ? (a.o.unit ? `${a.o.areaAc.toFixed(1)} ac, ${a.o.unit.muname.split(',')[0]}` : `${a.o.areaAc.toFixed(1)} ac of wet-lying ground`) : `along ${a.o.label}, ${a.o.drainAc.toFixed(1)} ac drain toward it`;
       sel = opt('auto', 'Include in the report') + opt('skip', 'Leave out of the report');
     } else {
       const w = a.o, st = w.check.status;
@@ -422,7 +472,7 @@ function refreshPlan() {
       sel = opt('auto', `Photo check: ${auto}`) + opt('existing', 'Already has a waterway') + opt('wooded', 'Trees or brush: leave alone') + opt('needs', 'Needs a waterway') + opt('skip', 'Leave out of the report');
     }
     return `<div class="item" id="item-${a.id}"><div class="item-h"><span class="tag ${cls}">${a.id}</span>` +
-      `<div class="item-t">${{ low: 'Low spot', wet: 'Wet ground', main: 'Tile main', ww: 'Flow path' }[a.type]}<small>${esc(line)}</small></div>` +
+      `<div class="item-t">${(a.type === 'wet' && a.o.unit ? 'Poorly drained soil' : { low: 'Low spot', wet: 'Wet ground', main: 'Tile main', ww: 'Flow path' }[a.type])}<small>${esc(line)}</small></div>` +
       `<button class="btn sm" data-go="${a.id}">Map</button></div>` +
       `<div class="item-r">${it ? esc(it.short) : 'Left out of the report'}</div>` +
       `<select data-ov="${a.id}" aria-label="Choice for ${a.id}">${sel}</select></div>`;
@@ -578,6 +628,7 @@ $('tChan').onchange = () => { vis('ov-chan', $('tChan').checked); $('chanWrap').
 $('chanThr').oninput = () => { $('chanOut').textContent = $('chanThr').value; };
 $('chanThr').onchange = () => { if (grid && map.getSource('ov-chan')) map.getSource('ov-chan').updateImage({ url: chanImage(), coordinates: grid.coords }); };
 $('tPond').onchange = () => vis('ov-pond', $('tPond').checked);
+$('tSoil').onchange = () => { vis('ov-soil', $('tSoil').checked); showSoils(); };
 $('tElev').onchange = () => { vis('ov-elev', $('tElev').checked); $('legend').classList.toggle('hide', !$('tElev').checked); };
 $('tRoads').onchange = () => { vis('roads', $('tRoads').checked); vis('places', $('tRoads').checked); };
 

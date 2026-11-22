@@ -226,7 +226,43 @@ function designTile(g, d) {
   for (const s of TILE_SIZES) if (tileCap(s, grade) >= q) { size = s; break; }
   return { pts, lenFt: len * FT, gradePct: grade * 100, flat: natural < gmin, maxDepthFt: maxDepth * FT, outDepthFt: outDepth * FT,
     q, basis: qWs >= qPond ? 'ws' : 'pond', size, end: c, endLL: ll(g, c),
-    lateralFt: d.areaAc >= 0.25 ? Math.round(d.areaAc * 43560 / 60 / 10) * 10 : 0 };
+    unit: unitAt(g, d.pit), spacing: spacingFor(unitAt(g, d.pit)),
+    lateralFt: d.areaAc >= 0.25 ? Math.round(d.areaAc * 43560 / spacingFor(unitAt(g, d.pit)) / 10) * 10 : 0 };
+}
+
+/* ---------- soils (USDA SSURGO) ----------
+   soil: { units: [{ mukey, musym, muname, drain, hydgrp, hydric }], cellUnit: Int16Array (unit index per grid cell, -1 = none) } */
+const DRAIN_RANK = { 'excessively drained': 0, 'somewhat excessively drained': 0, 'well drained': 1, 'moderately well drained': 2, 'somewhat poorly drained': 3, 'poorly drained': 4, 'very poorly drained': 5 };
+const drainRank = u => u && u.drain ? (DRAIN_RANK[u.drain.toLowerCase()] != null ? DRAIN_RANK[u.drain.toLowerCase()] : -1) : -1;
+// lateral spacing (ft) by hydrologic soil group; dual groups (B/D) use the drained letter
+function spacingFor(u) { const h = u && u.hydgrp ? u.hydgrp.charAt(0).toUpperCase() : ''; return h === 'A' ? 120 : h === 'B' ? 90 : h === 'C' ? 70 : h === 'D' ? 50 : 60; }
+const soilLabel = u => `${u.muname}${u.musym ? ' (' + u.musym + ')' : ''}`;
+const soilTraits = u => [u.drain ? u.drain.toLowerCase() : null, u.hydgrp ? 'hydrologic group ' + u.hydgrp : null].filter(Boolean).join(', ');
+function unitAt(g, cell) { const s = g.soil; if (!s) return null; const k = s.cellUnit[cell]; return k >= 0 ? s.units[k] : null; }
+function applySoils(g, soil) {
+  g.soil = soil || null;
+  if (soil) { soil.units.forEach(u => { u.acres = 0; }); for (const i of g.cells) { const k = soil.cellUnit[i]; if (k >= 0) soil.units[k].acres += g.cellAc; } }
+  retune(g, g.tune);
+}
+// rasterize soil polygons (rings in grid coordinates) onto the grid; polys: [{ unit: index, rings: [[[x,y],...],...] }]
+function rasterizeSoils(W, H, polys) {
+  const out = new Int16Array(W * H).fill(-1);
+  for (const p of polys) {
+    let y0 = H, y1 = 0; for (const r of p.rings) for (const q of r) { y0 = Math.min(y0, q[1]); y1 = Math.max(y1, q[1]); }
+    for (let y = Math.max(0, Math.floor(y0)); y <= Math.min(H - 1, Math.ceil(y1)); y++) {
+      const yc = y + .5, xs = [];
+      for (const r of p.rings) for (let i = 0, j = r.length - 1; i < r.length; j = i++) { const a = r[i], b = r[j]; if ((a[1] > yc) !== (b[1] > yc)) xs.push(a[0] + (yc - a[1]) / (b[1] - a[1]) * (b[0] - a[0])); }
+      xs.sort((a, b) => a - b);
+      for (let k = 0; k + 1 < xs.length; k += 2) for (let x = Math.max(0, Math.ceil(xs[k] - .5)); x <= Math.min(W - 1, Math.floor(xs[k + 1] - .5)); x++) out[y * W + x] = p.unit;
+    }
+  }
+  return out;
+}
+// WKT POLYGON / MULTIPOLYGON -> [[ring, ring...], ...] with rings as [[lng, lat], ...]
+function parseWktPolygons(wkt) {
+  const polys = [], reP = /\(\s*(?:\([^()]+\)\s*,?\s*)+\)/g, reR = /\(([^()]+)\)/g; let m;
+  while ((m = reP.exec(wkt))) { const rings = []; let r; reR.lastIndex = 0; while ((r = reR.exec(m[0]))) rings.push(r[1].trim().split(/\s*,\s*/).map(s => s.trim().split(/\s+/).map(Number))); if (rings.length) polys.push(rings); }
+  return polys;
 }
 
 // a tile main following a flow path, sized as the outlet for the acres that drain to it (3/8 in/day, subsurface)
@@ -248,15 +284,22 @@ function findWetAreas(g, pct) {
     sm[i] = s / n; vals.push(sm[i]);
   }
   vals.sort((a, b) => a - b);
-  const thr = vals[Math.min(vals.length - 1, Math.floor(vals.length * (1 - pct)))];
+  const thr = vals[Math.min(vals.length - 1, Math.floor(vals.length * (1 - pct)))], med = vals[vals.length >> 1] || 0, lv = g.tune.low;
+  // with the soil survey loaded, wet ground = poorly drained soils (more classes as sensitivity goes up); otherwise terrain alone
+  const wet = new Uint8Array(N);
+  for (const i of cells) {
+    const u = unitAt(g, i), rk = drainRank(u);
+    if (!g.soil || rk < 0) wet[i] = !g.soil && sm[i] >= thr ? 1 : 0;
+    else wet[i] = rk >= 5 || (rk === 4 && lv >= 1) || (u.hydric >= 50 && lv >= 1) || (rk === 3 && (lv >= 3 || (lv >= 2 && sm[i] >= med))) ? 1 : 0;
+  }
   const lab = new Int32Array(N).fill(-1), out = [];
   for (const start of cells) {
-    if (lab[start] >= 0 || inDep[start] || sm[start] < thr) continue;
+    if (lab[start] >= 0 || inDep[start] || !wet[start]) continue;
     const id = out.length, stack = [start], members = []; lab[start] = id; let sx = 0, sy = 0, low = start;
     while (stack.length) {
       const c = stack.pop(); members.push(c); if (A[c] > A[low]) low = c;
       const x = c % W, y = (c - x) / W; sx += x; sy += y;
-      for (let k = 0; k < 8; k++) { const xx = x + DX[k], yy = y + DY[k]; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; const m = yy * W + xx; if (M[m] && lab[m] < 0 && !inDep[m] && sm[m] >= thr) { lab[m] = id; stack.push(m); } }
+      for (let k = 0; k < 8; k++) { const xx = x + DX[k], yy = y + DY[k]; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; const m = yy * W + xx; if (M[m] && lab[m] < 0 && !inDep[m] && wet[m]) { lab[m] = id; stack.push(m); } }
     }
     out.push({ members, low, cx: sx / members.length, cy: sy / members.length, areaAc: members.length * g.cellAc });
   }
@@ -271,7 +314,9 @@ function findWetAreas(g, pct) {
     const grade = Math.max(0.001, len > 0 ? (S[a.low] - S[c]) / len : 0), q = 0.375 * a.areaAc / 23.8;
     let size = null; for (const s of TILE_SIZES) if (tileCap(s, grade) >= q) { size = s; break; }
     a.pts = pts; a.end = c; a.endLL = ll(g, c); a.lenFt = len * FT; a.gradePct = grade * 100; a.size = size;
-    a.lateralFt = Math.round(a.areaAc * 43560 / 60 / 10) * 10;
+    if (g.soil) { const cnt = new Map(); for (const m of a.members) { const k2 = g.soil.cellUnit[m]; if (k2 >= 0) cnt.set(k2, (cnt.get(k2) || 0) + 1); } let bk = -1, bn = 0; for (const [k2, n2] of cnt) if (n2 > bn) { bn = n2; bk = k2; } a.unit = bk >= 0 ? g.soil.units[bk] : null; a.unitShare = a.members.length ? bn / a.members.length : 0; }
+    a.spacing = spacingFor(a.unit);
+    a.lateralFt = Math.round(a.areaAc * 43560 / a.spacing / 10) * 10;
   });
   return kept;
 }
@@ -556,7 +601,7 @@ function tileText(d) {
   if (!t.size) s += 'That is more than a 24-inch tile carries at this grade: handle the surface water with a waterway or surface drain and size the tile for the ponded water only. ';
   if (t.flat) s += `The ground is nearly flat along this route, so the line is set at the 0.1% minimum grade and ends about ${f1(t.outDepthFt)} ft deep; it needs a ditch or main that deep to empty into. `;
   if (t.basis === 'ws' && d.wsAc > 40) s += 'With this much ground draining to it, most storm water will still cross on the surface, so pair the intake with a waterway. ';
-  if (t.lateralFt) s += `Optional: about ${f0(t.lateralFt)} ft of 4-inch laterals at roughly 60-ft spacing across the wet area (40 to 80 ft depending on soil).`;
+  if (t.lateralFt) s += `Optional: about ${f0(t.lateralFt)} ft of 4-inch laterals at roughly ${t.spacing}-ft spacing across the wet area` + (t.unit ? ` (soil here is ${soilLabel(t.unit)}, ${soilTraits(t.unit)}).` : ' (40 to 80 ft depending on soil).');
   return s.trim();
 }
 const fillText = d => `About ${f0(d.volCY)} cubic yards brings the low spot up to its spill elevation (about ${f0(d.spillElevFt)} ft). Strip and stockpile topsoil, place fill in lifts, replace the topsoil and blend into the surrounding grade so it sheds water.`;
@@ -572,7 +617,7 @@ function workItems(g, ov) {
     const alt = { tile: 'Tile option', fill: 'Fill option', drain: 'Surface drain option' };
     items.push({
       id: d.label, type: 'low', kind: 'Low spot that ponds water', where: fll(d.pitLL), method: m,
-      size: `${f1(d.areaAc)} ac, up to ${f1(d.maxFt)} ft deep, about ${f0(d.volCY)} CY of ponding space; ${f1(d.wsAc)} ac drain to it`,
+      size: `${f1(d.areaAc)} ac, up to ${f1(d.maxFt)} ft deep, about ${f0(d.volCY)} CY of ponding space; ${f1(d.wsAc)} ac drain to it` + (t.unit ? `; soil: ${soilLabel(t.unit)}, ${soilTraits(t.unit)}` : ''),
       recTitle: opts[m][0], rec: opts[m][1],
       more: ['tile', 'fill', 'drain'].filter(x => x !== m).map(x => [alt[x], opts[x][1]]),
       short: m === 'tile' ? `Tile: ${t.size ? t.size + '-in' : 'intake'}${t.lenFt >= 20 ? ', ' + f0(t.lenFt) + ' ft to outlet' : ''}` : m === 'fill' ? `Fill: about ${f0(d.volCY)} CY` : `Surface drain: ${f0(d.drainFt)} ft`,
@@ -581,13 +626,13 @@ function workItems(g, ov) {
   }
   for (const a of g.wet || []) {
     if (ov[a.label] === 'skip') continue;
-    items.push({ id: a.label, type: 'wet', kind: 'Wet-lying ground', where: fll(a.cenLL),
-      size: `${f1(a.areaAc)} ac of the flattest, most water-collecting ground in this field`,
+    const u = a.unit, collector = a.lenFt >= 20 ? `a ${a.size ? a.size + '-inch ' : ''}collector that runs about ${f0(a.lenFt)} ft at ${a.gradePct.toFixed(2)}% to the outlet at ${fll(a.endLL)}, where this ground drains off the field, or into a nearer main.` : `an outlet at the field edge beside it (${fll(a.endLL)}).`;
+    items.push({ id: a.label, type: 'wet', kind: u ? 'Poorly drained soil' : 'Wet-lying ground', where: fll(a.cenLL),
+      size: u ? `${f1(a.areaAc)} ac, ${Math.round(a.unitShare * 100)}% ${soilLabel(u)}: ${soilTraits(u)}${u.hydric ? ', ' + u.hydric + '% hydric' : ''}` : `${f1(a.areaAc)} ac of the flattest, most water-collecting ground in this field`,
       recTitle: 'Pattern tile',
-      rec: `Pattern tile this area: about ${f0(a.lateralFt)} ft of 4-inch laterals at roughly 60-ft spacing (40 to 80 ft depending on soil), feeding ` +
-        (a.lenFt >= 20 ? `a ${a.size ? a.size + '-inch ' : ''}collector that runs about ${f0(a.lenFt)} ft at ${a.gradePct.toFixed(2)}% to the outlet at ${fll(a.endLL)}, where this ground drains off the field, or into a nearer main.` : `an outlet at the field edge beside it (${fll(a.endLL)}).`) +
-        ` Collector sized for 3/8 inch per day over ${f1(a.areaAc)} acres. This is judged from terrain alone: confirm the ground really stays wet (yield maps, standing water, soil type) and is not already tiled.`,
-      more: [], short: `Pattern tile: about ${f0(a.lateralFt)} ft of laterals`, line: `${f1(a.areaAc)} ac` });
+      rec: `Pattern tile this area: about ${f0(a.lateralFt)} ft of 4-inch laterals at roughly ${a.spacing}-ft spacing` + (u ? ` (a typical spacing for hydrologic group ${u.hydgrp || '?'} soils; the contractor sets the final spacing and depth)` : ' (40 to 80 ft depending on soil)') + `, feeding ` + collector +
+        ` Collector sized for 3/8 inch per day over ${f1(a.areaAc)} acres. ` + (u ? 'The soil comes from the USDA soil survey, which maps at a coarse scale and does not show tile already in the ground: skip this if the area is already tiled.' : 'This is judged from terrain alone: confirm the ground really stays wet (yield maps, standing water, soil type) and is not already tiled.'),
+      more: [], short: `Pattern tile: about ${f0(a.lateralFt)} ft of laterals at ${a.spacing} ft`, line: u ? `${f1(a.areaAc)} ac, ${u.muname}` : `${f1(a.areaAc)} ac` });
   }
   for (const w of g.waterways) {
     if (!mainOn(w, ov)) continue;
@@ -633,6 +678,7 @@ function workItems(g, ov) {
   return items;
 }
 
+const soilRows = g => g.soil ? g.soil.units.filter(u => u.acres >= 0.05).sort((a, b) => b.acres - a.acres) : [];
 function summaryLines(g, ov) {
   ov = ov || {};
   const items = workItems(g, ov), lows = items.filter(i => i.type === 'low'), wws = items.filter(i => i.type === 'ww');
@@ -658,14 +704,15 @@ function summaryLines(g, ov) {
     ['Low spots', lows.length ? parts.join('; ') : 'None to address'],
     ['Tile', tileLine || 'None recommended'],
     ['Waterways', need.length ? wp.join('; ') : 'None to build'],
-    ['Main outlet', `${fll(ll(g, g.outlet))}, drains ${f0(g.outletAc)} ac`]
+    ['Main outlet', `${fll(ll(g, g.outlet))}, drains ${f0(g.outletAc)} ac`],
+    ...(g.soil ? [['Soils', soilRows(g).slice(0, 3).map(u => `${u.muname} ${Math.round(u.acres / g.fieldAc * 100)}%`).join('; ') || 'No soil survey data here']] : [])
   ];
 }
 
 const NOTES = [
   'Planning-level estimate from USGS 3DEP elevation data (mostly about 10 m / 33 ft resolution). Small rills, existing tile, terraces and grade changes under about 0.5 ft are below what this data can see. Confirm grades with an RTK survey before bidding or moving dirt.',
   'A flow path is dropped from the waterway list when the aerial photo shows grass or trees along it. The photo may be a year or more old and can be fooled by crop color, so confirm on the ground.',
-  'Wet-lying ground (P#) and tile mains (T#) come from terrain alone: the flattest, most water-collecting ground, and the draws that would carry a main. They do not account for soil type or for tile already in the ground.',
+  'Pattern-tile areas (P#) are the poorly drained soils from the USDA soil survey (SSURGO) when it loads, otherwise the flattest, most water-collecting ground by terrain. Tile mains (T#) follow the draws. Lateral spacing is a typical figure by hydrologic soil group (A 120 ft, B 90, C 70, D 50). None of this accounts for tile already in the ground.',
   'Tile sizes use Manning\'s equation for corrugated plastic tile flowing full, with a drainage coefficient of 1/2 inch per day over the watershed feeding each intake. Final size, grade, depth and outlet are the contractor\'s design. Existing tile is not mapped here; locate it first, since tying into a nearby main is often cheaper than a new outlet.',
   'Before draining or filling any low spot, check with the county FSA/NRCS office (form AD-1026). Draining a wetland without a determination can cost USDA program eligibility.',
   'Fill volumes are the space below each low spot\'s spill elevation. They are a ceiling: a partial fill or a drain often fixes the problem with less dirt.',
@@ -753,6 +800,12 @@ async function buildPDF(g, opts) {
     for (const [label, body] of it.more) { y -= 3; labeled(label + ':', body, MG + 44, 9.5); }
     y -= 12;
   }
+  if (g.soil && soilRows(g).length) {
+    if (y < MG + 110) newPage();
+    text('Soils in this field (USDA soil survey)', MG, bold, 12); y -= 2;
+    for (const u of soilRows(g)) { labeled(`${u.musym || '-'}  ${u.muname}:`, `${f1(u.acres)} ac (${Math.round(u.acres / g.fieldAc * 100)}%). ${soilTraits(u) || 'no drainage rating'}${u.hydric ? ', ' + u.hydric + '% hydric' : ''}. Typical lateral spacing ${spacingFor(u)} ft.`, MG, 9.5); y -= 2; }
+    y -= 8;
+  }
   if (opts.notes) { if (y < MG + 80) newPage(); text('Owner notes', MG, bold, 12); y -= 2; text(opts.notes, MG, font, 10); y -= 8; }
   if (y < MG + 200) newPage();
   y -= 4; text('Notes and assumptions', MG, bold, 12); y -= 2;
@@ -803,6 +856,6 @@ function buildKML(g, name, ov) {
 ${pm}</Document></kml>`;
 }
 
-global.FieldEngine = { analyzeGrid, retune, WW_LEVELS, LOW_LEVELS, DEFAULT_TUNE, checkWaterways, wwStatus, lowMethod, waterwayRuns, chaikin, cellLL: ll, drawPlan, buildPDF, buildKML,
+global.FieldEngine = { applySoils, rasterizeSoils, parseWktPolygons, drainRank, spacingFor, soilRows, analyzeGrid, retune, WW_LEVELS, LOW_LEVELS, DEFAULT_TUNE, checkWaterways, wwStatus, lowMethod, waterwayRuns, chaikin, cellLL: ll, drawPlan, buildPDF, buildKML,
   workItems, summaryLines, mainOn, noWork, rampColor, ELEV_RAMP, FT, ACRE, POND_M };
 })(window);

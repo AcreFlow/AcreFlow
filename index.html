@@ -95,6 +95,7 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
 .item-t small{display:block;font-weight:400;color:var(--mute);font-size:13px}
 .item-r{margin:8px 0;font-size:14px}
 .item select{width:100%;height:44px;border-radius:10px;border:1px solid var(--line);background:#232a24;padding:0 10px;font-size:16px}
+.soil{display:flex;gap:10px;align-items:flex-start;padding:5px 0;font-size:14px}.soil i{flex:none;width:16px;height:16px;border-radius:4px;margin-top:2px}.soil small{display:block;color:var(--mute);font-size:13px}
 .key{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--mute);margin-top:8px}
 .key i{display:inline-block;width:18px;height:4px;border-radius:2px;vertical-align:middle;margin-right:5px}
 .hide{display:none!important}
@@ -162,6 +163,8 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
             <div class="tog"><label for="tChan">Flow paths<small>Where runoff concentrates</small></label><input type="checkbox" class="sw r" id="tChan"></div>
             <div class="slider hide" id="chanWrap"><span>Detail</span><input type="range" id="chanThr" min="1" max="9" step="1" value="5" aria-label="Flow path detail"><output id="chanOut">5</output></div>
             <div class="tog"><label for="tPond">Ponding spots<small>Low spots with no way out</small></label><input type="checkbox" class="sw r" id="tPond"></div>
+            <div class="tog"><label for="tSoil">Soil types<small>USDA soil survey, colored by drainage</small></label><input type="checkbox" class="sw" id="tSoil"></div>
+            <div id="soilList" class="hide"></div>
             <div class="tog"><label for="tElev">Elevation colors<small>Low to high across the field</small></label><input type="checkbox" class="sw" id="tElev"></div>
             <div id="legend" class="hide"><div class="legend" id="legBar"></div><div class="legend-l"><span id="legLo"></span><span id="legHi"></span></div></div>
             <div class="tog"><label for="tRoads">Roads &amp; labels</label><input type="checkbox" class="sw" id="tRoads" checked></div>
@@ -174,7 +177,7 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
 
         <div id="vWork" class="hide">
           <p class="hint" id="itemsHint" style="margin-top:10px"></p>
-          <div class="key"><span><i style="background:#2f7bff"></i>Waterway to build</span><span><i style="background:var(--tile)"></i>Tile</span><span><i style="background:rgba(255,138,30,.5);height:10px"></i>Wet ground</span></div>
+          <div class="key"><span><i style="background:#2f7bff"></i>Waterway to build</span><span><i style="background:var(--tile)"></i>Tile</span><span><i style="background:rgba(255,138,30,.5);height:10px"></i>Pattern tile area</span></div>
           <div id="items"></div>
           <h2>How much to flag</h2>
           <div class="slider"><span>Waterways</span><input type="range" id="sWw" min="0" max="4" step="1" value="3" aria-label="Waterway sensitivity"><output id="sWwOut"></output></div>
@@ -189,7 +192,7 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
             <button class="btn" id="kmlBtn" disabled>GPS file (KML)</button>
           </div>
           <p class="hint" id="reportMsg" style="font-size:13px"></p>
-          <p class="hint" style="font-size:13px">Planning-level only. Elevation is USGS data at about 10 m resolution, and existing waterways are judged from the aerial photo. Change any item above if you know better. Existing tile is not mapped.</p>
+          <p class="hint" style="font-size:13px">Planning-level only. Elevation is USGS data at about 10 m resolution, soils are from the USDA soil survey, and grass and trees are judged from the aerial photo. Change any item above if you know better. Existing tile is not mapped.</p>
         </div>
         <p class="ver" id="ver"></p>
       </div>
@@ -198,7 +201,7 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
 </div>
 
 <script src="vendor/maplibre-gl.js"></script>
-<script src="engine.js?v=9"></script>
-<script src="app.js?v=9"></script>
+<script src="engine.js?v=10"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>
