@@ -1,6 +1,6 @@
 // Field Flow service worker: app shell + library cached for fast launch; map tiles stay live.
-const SHELL = 'fieldflow-v1';
-const FILES = ['./', 'index.html', 'manifest.json', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png',
+const SHELL = 'fieldflow-v2';
+const FILES = ['./', 'index.html', 'app.js', 'engine.js', 'pdf-lib.min.js', 'manifest.json', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png',
   'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js', 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(SHELL).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {

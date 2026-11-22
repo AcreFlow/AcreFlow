@@ -16,30 +16,40 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&display=swap" rel="stylesheet">
 <style>
-:root{--panel:rgba(18,22,20,.92);--ink:#eef2ea;--mute:#a7b2a4;--line:rgba(255,255,255,.12);--green:#a4c639;--rain:#4fb3ff;--warn:#ffb347}
+:root{--panel:rgba(18,22,20,.93);--ink:#eef2ea;--mute:#a7b2a4;--line:rgba(255,255,255,.12);--green:#a4c639;--rain:#4fb3ff;--warn:#ffb347}
 *{box-sizing:border-box;min-width:0}
 html,body{margin:0;height:100%;background:#0d100e;color:var(--ink);font:15px/1.4 Barlow,system-ui,sans-serif;overflow:hidden;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
-.search input{-webkit-user-select:text;user-select:text}
+input[type=search],input[type=text],textarea{-webkit-user-select:text;user-select:text}
+#map{position:absolute;inset:0}
+#rain{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:2}
+button,input,textarea{font:inherit;color:inherit}
 .install{position:absolute;left:10px;right:10px;top:calc(env(safe-area-inset-top) + 62px);z-index:6;max-width:520px;margin:0 auto;background:var(--rain);color:#04223a;border-radius:12px;padding:10px 12px;display:flex;gap:10px;align-items:center;font-weight:500}
 .install button{background:none;border:0;font-weight:700;min-width:44px;min-height:44px;cursor:pointer}
-#map{position:absolute;inset:0}
-button,input{font:inherit;color:inherit}
 .top{position:absolute;left:0;right:0;top:0;padding:calc(env(safe-area-inset-top) + 10px) 10px 0;display:flex;gap:8px;z-index:5;pointer-events:none}
 .top>*{pointer-events:auto}
 .search{flex:1;display:flex;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;backdrop-filter:blur(6px)}
 .search input{flex:1;background:none;border:0;padding:0 12px;height:44px;font-size:16px;outline:none}
-.btn{height:44px;min-width:44px;padding:0 14px;border-radius:12px;border:1px solid var(--line);background:var(--panel);cursor:pointer;font-weight:600;backdrop-filter:blur(6px)}
+.btn{height:44px;min-width:44px;padding:0 14px;border-radius:12px;border:1px solid var(--line);background:var(--panel);cursor:pointer;font-weight:600;backdrop-filter:blur(6px);white-space:nowrap}
 .btn:focus-visible,.search input:focus-visible{outline:2px solid var(--green);outline-offset:1px}
 .btn.primary{background:var(--green);color:#132006;border-color:transparent}
-.btn.rain{background:var(--rain);color:#04223a;border-color:transparent}
+.btn.rainon{background:var(--rain);color:#04223a;border-color:transparent}
 .btn:disabled{opacity:.45;cursor:default}
 .search .btn{border:0;border-radius:0;border-left:1px solid var(--line);backdrop-filter:none}
+
+/* draggable bottom sheet */
 .sheet{position:absolute;left:0;right:0;bottom:0;z-index:5;padding:0 10px calc(env(safe-area-inset-bottom) + 10px);pointer-events:none}
-.card{pointer-events:auto;max-width:520px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:12px;backdrop-filter:blur(8px);max-height:52vh;overflow-y:auto}
+.card{pointer-events:auto;max-width:520px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:16px;backdrop-filter:blur(8px);display:flex;flex-direction:column;max-height:58vh;transition:transform .25s cubic-bezier(.2,.8,.2,1);will-change:transform}
+.card.dragging{transition:none}
+.grab{flex:none;height:26px;display:flex;align-items:center;justify-content:center;cursor:grab;touch-action:none}
+.grab::before{content:"";width:44px;height:5px;border-radius:3px;background:rgba(255,255,255,.35)}
+.body{overflow-y:auto;padding:0 12px 12px;-webkit-overflow-scrolling:touch}
+.head{touch-action:none}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .row+.row{margin-top:10px}
 .row .btn{flex:1}
-h1{font:700 20px/1.1 'Barlow Condensed',sans-serif;letter-spacing:.01em;margin:0}
+.head.row .btn{flex:none}
+h1{font:700 20px/1.1 'Barlow Condensed',sans-serif;letter-spacing:.01em;margin:0;flex:1}
+h2{font:700 17px/1.1 'Barlow Condensed',sans-serif;margin:16px 0 6px}
 .hint{color:var(--mute);font-size:14px;margin:4px 0 0}
 .stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px}
 .stat{background:rgba(255,255,255,.05);border-radius:10px;padding:8px}
@@ -49,26 +59,33 @@ h1{font:700 20px/1.1 'Barlow Condensed',sans-serif;letter-spacing:.01em;margin:0
 .tog:first-child{border-top:0}
 .tog label{flex:1;cursor:pointer}
 .tog small{display:block;color:var(--mute);font-size:13px}
-.sw{appearance:none;width:48px;height:28px;border-radius:14px;background:#3a423a;position:relative;cursor:pointer;flex:none;transition:background .15s}
+.sw{appearance:none;-webkit-appearance:none;width:48px;height:28px;border-radius:14px;background:#3a423a;position:relative;cursor:pointer;flex:none;transition:background .15s;margin:0}
 .sw::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;transition:transform .15s}
 .sw:checked{background:var(--green)}.sw.r:checked{background:var(--rain)}
 .sw:checked::after{transform:translateX(20px)}
 .sw:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 input[type=range]{width:100%;accent-color:var(--green);height:28px}
-.slider{display:grid;grid-template-columns:auto minmax(0,1fr) 3.2em;gap:10px;align-items:center;font-size:14px;color:var(--mute)}
+.slider{display:grid;grid-template-columns:4.2em minmax(0,1fr) 3.2em;gap:10px;align-items:center;font-size:14px;color:var(--mute)}
 .slider output{text-align:right;color:var(--ink);font-variant-numeric:tabular-nums}
 .legend{height:10px;border-radius:5px;margin:6px 0 2px}
 .legend-l{display:flex;justify-content:space-between;color:var(--mute);font-size:13px}
+.field-in{width:100%;height:44px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.06);padding:0 12px;font-size:16px;outline:none}
+textarea.field-in{height:64px;padding:10px 12px;resize:vertical;margin-top:8px}
+.field-in:focus{border-color:var(--green)}
+.items{margin:8px 0 0;padding:0;list-style:none}
+.items li{display:flex;gap:8px;padding:6px 0;border-top:1px solid var(--line);font-size:14px}
+.items b{flex:none;width:2.4em;color:var(--rain)}
 .hide{display:none!important}
 .status{color:var(--warn);font-size:14px;margin-top:8px}
 .vtx{width:16px;height:16px;border-radius:50%;background:var(--green);border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.5)}
 .outlet{background:var(--rain);color:#04223a;font:600 12px Barlow;padding:3px 7px;border-radius:8px;border:2px solid #fff;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.5)}
 .maplibregl-ctrl-bottom-right{bottom:auto;top:calc(env(safe-area-inset-top) + 62px)}
-@media(prefers-reduced-motion:reduce){.sw,.sw::after{transition:none}}
+@media(prefers-reduced-motion:reduce){.sw,.sw::after,.card{transition:none}}
 </style>
 </head>
 <body>
 <div id="map"></div>
+<canvas id="rain"></canvas>
 <div class="install hide" id="install"><span style="flex:1" id="installMsg"></span><button id="installBtn" class="hide">Install</button><button id="installX" aria-label="Dismiss">✕</button></div>
 
 <div class="top">
@@ -81,426 +98,64 @@ input[type=range]{width:100%;accent-color:var(--green);height:28px}
 
 <div class="sheet">
   <div class="card" id="card">
-    <!-- idle -->
-    <div id="pIdle">
-      <h1>Field terrain &amp; water flow</h1>
-      <p class="hint">Zoom to a field, tap <b>Draw field</b>, then tap its corners.</p>
-      <div class="row"><button class="btn primary" id="startDraw">Draw field</button></div>
-    </div>
-    <!-- drawing -->
-    <div id="pDraw" class="hide">
-      <h1>Tap each corner of the field</h1>
-      <p class="hint" id="drawHint">0 points. Drag to move the map.</p>
-      <div class="row">
-        <button class="btn" id="undoPt">Undo</button>
-        <button class="btn" id="cancelDraw">Cancel</button>
-        <button class="btn primary" id="finishDraw" disabled>Finish</button>
+    <div class="grab" id="grab" role="button" aria-label="Drag or tap to resize panel" tabindex="0"></div>
+    <div class="body" id="cardBody">
+      <!-- idle -->
+      <div id="pIdle">
+        <div class="head row"><h1>Field terrain &amp; water flow</h1></div>
+        <p class="hint">Zoom to a field, tap <b>Draw field</b>, then tap its corners.</p>
+        <div class="row"><button class="btn primary" id="startDraw">Draw field</button></div>
       </div>
-    </div>
-    <!-- field -->
-    <div id="pField" class="hide">
-      <div class="row" style="justify-content:space-between">
-        <h1 id="fTitle">Your field</h1>
-        <div class="row" style="flex:none;margin:0"><button class="btn" id="redraw">New field</button></div>
+      <!-- drawing -->
+      <div id="pDraw" class="hide">
+        <div class="head row"><h1>Tap each corner of the field</h1></div>
+        <p class="hint" id="drawHint">0 points. Drag to move the map.</p>
+        <div class="row">
+          <button class="btn" id="undoPt">Undo</button>
+          <button class="btn" id="cancelDraw">Cancel</button>
+          <button class="btn primary" id="finishDraw" disabled>Finish</button>
+        </div>
       </div>
-      <div id="status" class="status"></div>
-      <div class="stats" id="stats"></div>
-      <div style="margin-top:8px">
-        <div class="tog"><label for="t3d">3D terrain<small>Drag with two fingers to tilt</small></label><input type="checkbox" class="sw" id="t3d" checked></div>
-        <div class="slider" id="exWrap"><span>Height ×</span><input type="range" id="ex" min="1" max="10" step="0.5" value="4"><output id="exOut">4×</output></div>
-        <div class="tog"><label for="tRain">Rainfall flow<small>Animated drops run downhill</small></label><input type="checkbox" class="sw r" id="tRain"></div>
-        <div class="slider" id="rainWrap"><span>Rain</span><input type="range" id="rainAmt" min="300" max="6000" step="100" value="2500"><output id="rainOut">2.5k</output></div>
-        <div class="tog"><label for="tChan">Flow paths<small>Where runoff concentrates</small></label><input type="checkbox" class="sw r" id="tChan"></div>
-        <div class="slider hide" id="chanWrap"><span>Detail</span><input type="range" id="chanThr" min="1" max="9" step="1" value="5"><output id="chanOut">5</output></div>
-        <div class="tog"><label for="tPond">Ponding spots<small>Low spots with no way out</small></label><input type="checkbox" class="sw r" id="tPond"></div>
-        <div class="tog"><label for="tElev">Elevation colors<small>Low to high across the field</small></label><input type="checkbox" class="sw" id="tElev"></div>
-        <div id="legend" class="hide"><div class="legend" id="legBar"></div><div class="legend-l"><span id="legLo"></span><span id="legHi"></span></div></div>
-        <div class="tog"><label for="tRoads">Roads &amp; labels</label><input type="checkbox" class="sw" id="tRoads" checked></div>
+      <!-- field -->
+      <div id="pField" class="hide">
+        <div class="head row">
+          <h1 id="fTitle">Your field</h1>
+          <button class="btn" id="rainQuick" aria-pressed="false">Rain</button>
+          <button class="btn" id="redraw">New field</button>
+        </div>
+        <div id="status" class="status"></div>
+        <div class="stats" id="stats"></div>
+        <div style="margin-top:8px">
+          <div class="tog"><label for="t3d">3D terrain<small>Two-finger drag to tilt</small></label><input type="checkbox" class="sw" id="t3d" checked></div>
+          <div class="slider" id="exWrap"><span>Height ×</span><input type="range" id="ex" min="1" max="10" step="0.5" value="4"><output id="exOut">4×</output></div>
+          <div class="tog"><label for="tRain">Rainfall flow<small>Drops run downhill and gather</small></label><input type="checkbox" class="sw r" id="tRain"></div>
+          <div class="slider hide" id="rainWrap"><span>Rain</span><input type="range" id="rainAmt" min="300" max="5000" step="100" value="1800"><output id="rainOut">1.8k</output></div>
+          <div class="tog"><label for="tChan">Flow paths<small>Where runoff concentrates</small></label><input type="checkbox" class="sw r" id="tChan"></div>
+          <div class="slider hide" id="chanWrap"><span>Detail</span><input type="range" id="chanThr" min="1" max="9" step="1" value="5"><output id="chanOut">5</output></div>
+          <div class="tog"><label for="tPond">Ponding spots<small>Low spots with no way out</small></label><input type="checkbox" class="sw r" id="tPond"></div>
+          <div class="tog"><label for="tElev">Elevation colors<small>Low to high across the field</small></label><input type="checkbox" class="sw" id="tElev"></div>
+          <div id="legend" class="hide"><div class="legend" id="legBar"></div><div class="legend-l"><span id="legLo"></span><span id="legHi"></span></div></div>
+          <div class="tog"><label for="tRoads">Roads &amp; labels</label><input type="checkbox" class="sw" id="tRoads" checked></div>
+        </div>
+
+        <h2>Dirt work report</h2>
+        <p class="hint" id="itemsHint">Low spots and flow paths a contractor can bid on.</p>
+        <ul class="items" id="items"></ul>
+        <div style="margin-top:8px"><input class="field-in" id="fname" type="text" placeholder="Field name for the report" maxlength="60"></div>
+        <textarea class="field-in" id="fnotes" placeholder="Notes for the contractor (optional): access, tile, timing…" maxlength="600"></textarea>
+        <div class="row" style="margin-top:8px">
+          <button class="btn primary" id="pdfBtn" disabled>Report (PDF)</button>
+          <button class="btn" id="kmlBtn" disabled>GPS file (KML)</button>
+        </div>
+        <p class="hint" id="reportMsg" style="font-size:13px"></p>
+        <p class="hint" style="font-size:13px">Elevation is USGS data (mostly ~10 m resolution). It shows field-scale drainage well; tile lines and small rills are below its resolution.</p>
       </div>
-      <p class="hint" style="font-size:13px">Elevation is USGS data (mostly ~10 m resolution, finer in places). It shows field-scale drainage well; tile lines and small rills are below its resolution.</p>
     </div>
   </div>
 </div>
 
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-<script>
-{
-const $ = id => document.getElementById(id);
-const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
-const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
-const FT = 3.28084, ACRE = 4046.856;
-const ELEV_RAMP = [[0,[38,120,170]],[.25,[70,170,140]],[.5,[220,215,90]],[.75,[230,140,50]],[1,[170,50,40]]];
-
-const store = {get(k){try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
-const saved = store.get('ftf-view');
-
-const map = new maplibregl.Map({
-  container:'map',
-  center: saved ? saved.c : [-90.19, 41.30],
-  zoom: saved ? saved.z : 13,
-  maxPitch: 80,
-  attributionControl:{compact:true},
-  style:{
-    version:8,
-    sources:{
-      sat:{type:'raster',tiles:[ESRI+'World_Imagery/MapServer/tile/{z}/{y}/{x}'],tileSize:256,maxzoom:19,attribution:'Imagery © Esri, Maxar, Earthstar Geographics'},
-      roads:{type:'raster',tiles:[ESRI+'Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}'],tileSize:256,maxzoom:19},
-      places:{type:'raster',tiles:[ESRI+'Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'],tileSize:256,maxzoom:19},
-      dem:{type:'raster-dem',tiles:[DEM_URL],encoding:'terrarium',tileSize:256,maxzoom:15,attribution:'Elevation: AWS Terrain Tiles (USGS 3DEP)'},
-      demhs:{type:'raster-dem',tiles:[DEM_URL],encoding:'terrarium',tileSize:256,maxzoom:15}
-    },
-    layers:[
-      {id:'sat',type:'raster',source:'sat'},
-      {id:'hs',type:'hillshade',source:'demhs',paint:{'hillshade-exaggeration':.3,'hillshade-shadow-color':'#000','hillshade-highlight-color':'#fff'}},
-      {id:'roads',type:'raster',source:'roads',paint:{'raster-opacity':.85}},
-      {id:'places',type:'raster',source:'places'}
-    ]
-  }
-});
-map.addControl(new maplibregl.NavigationControl({visualizePitch:true}),'bottom-right');
-map.on('moveend',()=>store.set('ftf-view',{c:map.getCenter().toArray(),z:map.getZoom()}));
-
-/* ---------- state ---------- */
-let mode='idle', pts=[], vtxMarkers=[], field=null, grid=null, outletMarker=null;
-let rainOn=false, rainRAF=0, particles=null;
-
-const show = m => { mode=m; $('pIdle').classList.toggle('hide',m!=='idle'); $('pDraw').classList.toggle('hide',m!=='draw'); $('pField').classList.toggle('hide',m!=='field'); };
-const fc = f => ({type:'FeatureCollection',features:f});
-const empty = fc([]);
-
-map.on('load',()=>{
-  map.addSource('field',{type:'geojson',data:empty});
-  map.addSource('mask',{type:'geojson',data:empty});
-  map.addSource('draft',{type:'geojson',data:empty});
-  map.addLayer({id:'mask',type:'fill',source:'mask',paint:{'fill-color':'#000','fill-opacity':.45}});
-  map.addLayer({id:'field-line',type:'line',source:'field',paint:{'line-color':'#fff','line-width':2.5}});
-  map.addLayer({id:'draft-line',type:'line',source:'draft',paint:{'line-color':'#a4c639','line-width':3,'line-dasharray':[2,1]}});
-  const f = store.get('ftf-field');
-  if (f && f.length>=3) setField(f, false);
-});
-
-/* ---------- search & locate ---------- */
-$('searchForm').addEventListener('submit', async e=>{
-  e.preventDefault();
-  const q=$('q').value.trim(); if(!q) return;
-  const m=q.match(/^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/);
-  if(m){ map.flyTo({center:[+m[2],+m[1]],zoom:15}); return; }
-  try{
-    const r=await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q='+encodeURIComponent(q));
-    const j=await r.json();
-    if(j[0]) map.flyTo({center:[+j[0].lon,+j[0].lat],zoom:15}); else $('q').value='Not found: '+q;
-  }catch(err){ $('q').value='Search unavailable'; }
-  $('q').blur();
-});
-$('locate').onclick=()=>{
-  if(!navigator.geolocation) return;
-  navigator.geolocation.getCurrentPosition(p=>map.flyTo({center:[p.coords.longitude,p.coords.latitude],zoom:16}),()=>{}, {enableHighAccuracy:true,timeout:10000});
-};
-
-/* ---------- drawing ---------- */
-function updateDraft(){
-  const c=pts.map(p=>p);
-  const feats=[];
-  if(c.length>=2) feats.push({type:'Feature',geometry:{type:'LineString',coordinates:c.length>=3?[...c,c[0]]:c}});
-  map.getSource('draft').setData(fc(feats));
-  $('drawHint').textContent = pts.length+' point'+(pts.length===1?'':'s')+(pts.length<3?'. Need at least 3.':'. Tap Finish when done.');
-  $('finishDraw').disabled = pts.length<3;
-}
-function clearVtx(){ vtxMarkers.forEach(m=>m.remove()); vtxMarkers=[]; }
-$('startDraw').onclick = startDraw;
-$('redraw').onclick = startDraw;
-function startDraw(){
-  stopRain(); clearAnalysis(); clearVtx(); pts=[];
-  map.getSource('field').setData(empty); map.getSource('mask').setData(empty);
-  map.setTerrain(null); map.easeTo({pitch:0,bearing:0});
-  show('draw'); updateDraft();
-}
-map.on('click', e=>{
-  if(mode!=='draw') return;
-  const p=[e.lngLat.lng,e.lngLat.lat]; pts.push(p);
-  const el=document.createElement('div'); el.className='vtx';
-  vtxMarkers.push(new maplibregl.Marker({element:el}).setLngLat(p).addTo(map));
-  updateDraft();
-});
-$('undoPt').onclick=()=>{ pts.pop(); const m=vtxMarkers.pop(); if(m) m.remove(); updateDraft(); };
-$('cancelDraw').onclick=()=>{ clearVtx(); pts=[]; map.getSource('draft').setData(empty); const f=store.get('ftf-field'); if(f&&f.length>=3) setField(f,false); else show('idle'); };
-$('finishDraw').onclick=()=>{ const p=pts.slice(); clearVtx(); pts=[]; map.getSource('draft').setData(empty); setField(p,true); };
-
-function setField(poly, save){
-  field=poly; if(save) store.set('ftf-field',poly);
-  const ring=[...poly,poly[0]];
-  map.getSource('field').setData(fc([{type:'Feature',geometry:{type:'Polygon',coordinates:[ring]}}]));
-  map.getSource('mask').setData(fc([{type:'Feature',geometry:{type:'Polygon',coordinates:[[[-180,-85],[180,-85],[180,85],[-180,85],[-180,-85]],ring.slice().reverse()]}}]));
-  show('field');
-  $('fTitle').textContent = acres(poly).toFixed(1)+' acre field';
-  const b=poly.reduce((a,p)=>[Math.min(a[0],p[0]),Math.min(a[1],p[1]),Math.max(a[2],p[0]),Math.max(a[3],p[1])],[180,90,-180,-90]);
-  const pad=Math.min(innerWidth,innerHeight)*0.12;
-  map.fitBounds([[b[0],b[1]],[b[2],b[3]]],{padding:{top:80+pad,bottom:Math.min(innerHeight*0.5,360)+pad*.3,left:pad,right:pad},pitch:$('t3d').checked?55:0,duration:1200});
-  apply3D();
-  analyze(poly);
-}
-
-function acres(poly){
-  const lat0=poly.reduce((s,p)=>s+p[1],0)/poly.length*Math.PI/180;
-  const kx=111320*Math.cos(lat0), ky=110540; let a=0;
-  for(let i=0;i<poly.length;i++){const p=poly[i],q=poly[(i+1)%poly.length];a+=p[0]*kx*q[1]*ky-q[0]*kx*p[1]*ky;}
-  return Math.abs(a/2)/ACRE;
-}
-
-/* ---------- mercator helpers ---------- */
-const worldPx = z => 256*Math.pow(2,z);
-const lngToX=(lng,z)=>(lng+180)/360*worldPx(z);
-const latToY=(lat,z)=>{const s=Math.sin(lat*Math.PI/180);return (0.5-Math.log((1+s)/(1-s))/(4*Math.PI))*worldPx(z);};
-const xToLng=(x,z)=>x/worldPx(z)*360-180;
-const yToLat=(y,z)=>{const n=Math.PI-2*Math.PI*y/worldPx(z);return 180/Math.PI*Math.atan(Math.sinh(n));};
-
-function loadImg(url){return new Promise((res,rej)=>{const im=new Image();im.crossOrigin='anonymous';im.onload=()=>res(im);im.onerror=rej;im.src=url;});}
-
-/* ---------- analysis ---------- */
-let runId=0;
-async function analyze(poly){
-  const id=++runId;
-  clearAnalysis();
-  setStatus('Reading elevation…');
-  let lo=[180,90],hi=[-180,-90];
-  poly.forEach(p=>{lo=[Math.min(lo[0],p[0]),Math.min(lo[1],p[1])];hi=[Math.max(hi[0],p[0]),Math.max(hi[1],p[1])];});
-  const padX=Math.max((hi[0]-lo[0])*.12,0.0008), padY=Math.max((hi[1]-lo[1])*.12,0.0006);
-  lo=[lo[0]-padX,lo[1]-padY]; hi=[hi[0]+padX,hi[1]+padY];
-  let z=15, x0,x1,y0,y1;
-  for(;z>=10;z--){ x0=Math.floor(lngToX(lo[0],z)); x1=Math.ceil(lngToX(hi[0],z)); y0=Math.floor(latToY(hi[1],z)); y1=Math.ceil(latToY(lo[1],z)); if(Math.max(x1-x0,y1-y0)<=700) break; }
-  const W=x1-x0, H=y1-y0, N=W*H;
-  const cv=document.createElement('canvas'); cv.width=W; cv.height=H; const cx=cv.getContext('2d',{willReadFrequently:true});
-  const jobs=[];
-  for(let tx=Math.floor(x0/256);tx<=Math.floor((x1-1)/256);tx++) for(let ty=Math.floor(y0/256);ty<=Math.floor((y1-1)/256);ty++){
-    jobs.push(loadImg(DEM_URL.replace('{z}',z).replace('{x}',tx).replace('{y}',ty)).then(im=>cx.drawImage(im,tx*256-x0,ty*256-y0)));
-  }
-  try{ await Promise.all(jobs); }catch(e){ if(id===runId) setStatus('Could not load elevation data. Check your connection and try again.'); return; }
-  if(id!==runId) return;
-  setStatus('Tracing water flow…');
-  await new Promise(r=>setTimeout(r,30));
-  const px=cx.getImageData(0,0,W,H).data;
-  const E=new Float32Array(N);
-  for(let i=0;i<N;i++) E[i]=px[i*4]*256+px[i*4+1]+px[i*4+2]/256-32768;
-
-  // smooth (2 passes 3x3) to soften resampling steps
-  let S=E;
-  for(let pass=0;pass<2;pass++){
-    const T=new Float32Array(N);
-    for(let y=0;y<H;y++) for(let x=0;x<W;x++){
-      let s=0,n=0;
-      for(let dy=-1;dy<=1;dy++){const yy=y+dy;if(yy<0||yy>=H)continue;for(let dx=-1;dx<=1;dx++){const xx=x+dx;if(xx<0||xx>=W)continue;s+=S[yy*W+xx];n++;}}
-      T[y*W+x]=s/n;
-    }
-    S=T;
-  }
-
-  // mask
-  const pp=poly.map(p=>[lngToX(p[0],z)-x0,latToY(p[1],z)-y0]);
-  const M=new Uint8Array(N); const cells=[];
-  for(let y=0;y<H;y++){
-    const yc=y+.5, xs=[];
-    for(let i=0,j=pp.length-1;i<pp.length;j=i++){const a=pp[i],b=pp[j];if((a[1]>yc)!==(b[1]>yc)) xs.push(a[0]+(yc-a[1])/(b[1]-a[1])*(b[0]-a[0]));}
-    xs.sort((a,b)=>a-b);
-    for(let k=0;k+1<xs.length;k+=2) for(let x=Math.max(0,Math.ceil(xs[k]-.5));x<=Math.min(W-1,Math.floor(xs[k+1]-.5));x++){M[y*W+x]=1;cells.push(y*W+x);}
-  }
-  if(!cells.length){ setStatus('Field is too small to analyze.'); return; }
-
-  const latC=(lo[1]+hi[1])/2;
-  const cs=40075016.686*Math.cos(latC*Math.PI/180)/worldPx(z); // meters per cell
-
-  // priority-flood depression fill
-  const F=new Float64Array(N), closed=new Uint8Array(N);
-  const hIdx=new Int32Array(N), hKey=new Float64Array(N); let hn=0;
-  const push=(i,k)=>{let c=hn++;while(c>0){const p=(c-1)>>1;if(hKey[p]<=k)break;hIdx[c]=hIdx[p];hKey[c]=hKey[p];c=p;}hIdx[c]=i;hKey[c]=k;};
-  const pop=()=>{const top=hIdx[0];const li=hIdx[--hn],lk=hKey[hn];let c=0;for(;;){let l=2*c+1;if(l>=hn)break;if(l+1<hn&&hKey[l+1]<hKey[l])l++;if(hKey[l]>=lk)break;hIdx[c]=hIdx[l];hKey[c]=hKey[l];c=l;}hIdx[c]=li;hKey[c]=lk;return top;};
-  for(let x=0;x<W;x++) for(const y of [0,H-1]){const i=y*W+x;if(!closed[i]){closed[i]=1;F[i]=S[i];push(i,F[i]);}}
-  for(let y=1;y<H-1;y++) for(const x of [0,W-1]){const i=y*W+x;if(!closed[i]){closed[i]=1;F[i]=S[i];push(i,F[i]);}}
-  const DX=[-1,0,1,-1,1,-1,0,1], DY=[-1,-1,-1,0,0,1,1,1], DD=[Math.SQRT2,1,Math.SQRT2,1,1,Math.SQRT2,1,Math.SQRT2];
-  const EPS=1e-4;
-  while(hn>0){
-    const c=pop(), cx0=c%W, cy0=(c-cx0)/W;
-    for(let k=0;k<8;k++){const xx=cx0+DX[k],yy=cy0+DY[k];if(xx<0||yy<0||xx>=W||yy>=H)continue;const n=yy*W+xx;if(closed[n])continue;closed[n]=1;F[n]=Math.max(S[n],F[c]+EPS);push(n,F[n]);}
-  }
-
-  // D8 flow direction + accumulation
-  const D=new Int32Array(N).fill(-1);
-  for(let y=0;y<H;y++) for(let x=0;x<W;x++){
-    const i=y*W+x; let best=0,bi=-1;
-    for(let k=0;k<8;k++){const xx=x+DX[k],yy=y+DY[k];if(xx<0||yy<0||xx>=W||yy>=H)continue;const n=yy*W+xx;const s=(F[i]-F[n])/DD[k];if(s>best){best=s;bi=n;}}
-    D[i]=bi;
-  }
-  const order=new Uint32Array(N); for(let i=0;i<N;i++) order[i]=i;
-  order.sort((a,b)=>F[b]-F[a]);
-  const A=new Float32Array(N).fill(1);
-  for(let k=0;k<N;k++){const c=order[k];if(D[c]>=0)A[D[c]]+=A[c];}
-
-  // gradient for particles (m/m)
-  const GX=new Float32Array(N), GY=new Float32Array(N);
-  let slopeSum=0;
-  for(let y=0;y<H;y++) for(let x=0;x<W;x++){
-    const i=y*W+x, xl=Math.max(0,x-1), xr=Math.min(W-1,x+1), yu=Math.max(0,y-1), yd=Math.min(H-1,y+1);
-    GX[i]=(S[y*W+xr]-S[y*W+xl])/((xr-xl)*cs); GY[i]=(S[yd*W+x]-S[yu*W+x])/((yd-yu)*cs);
-    if(M[i]) slopeSum+=Math.hypot(GX[i],GY[i]);
-  }
-
-  // stats
-  let mn=1e9,mx=-1e9,sum=0,pond=0;
-  const P=new Float32Array(N);
-  for(const i of cells){const e=S[i];mn=Math.min(mn,e);mx=Math.max(mx,e);sum+=e;P[i]=F[i]-S[i];if(P[i]>0.05)pond++;}
-  let outlet=-1,outA=0;
-  for(const i of cells){if(D[i]<0||!M[D[i]]){if(A[i]>outA){outA=A[i];outlet=i;}}}
-  const cellAc=cs*cs/ACRE;
-
-  grid={W,H,z,x0,y0,cs,S,M,A,P,GX,GY,cells,mn,mx,
-    coords:[[xToLng(x0,z),yToLat(y0,z)],[xToLng(x0+W,z),yToLat(y0,z)],[xToLng(x0+W,z),yToLat(y0+H,z)],[xToLng(x0,z),yToLat(y0+H,z)]]};
-
-  $('stats').innerHTML=[
-    [((mx-mn)*FT).toFixed(1)+' ft','Relief (low to high)'],
-    [(slopeSum/cells.length*100).toFixed(1)+'%','Average slope'],
-    [(pond*cellAc).toFixed(1)+' ac','Ponding area'],
-    [(mn*FT).toFixed(0)+' ft','Lowest point'],
-    [(mx*FT).toFixed(0)+' ft','Highest point'],
-    [(outA*cellAc).toFixed(0)+' ac','Drains to main outlet']
-  ].map(s=>`<div class="stat"><b>${s[0]}</b><span>${s[1]}</span></div>`).join('');
-  $('legLo').textContent=(mn*FT).toFixed(0)+' ft'; $('legHi').textContent=(mx*FT).toFixed(0)+' ft';
-  $('legBar').style.background='linear-gradient(90deg,'+ELEV_RAMP.map(r=>`rgb(${r[1]}) ${r[0]*100}%`).join(',')+')';
-
-  if(outlet>=0){
-    const ox=outlet%W, oy=(outlet-ox)/W;
-    const el=document.createElement('div'); el.className='outlet'; el.textContent='Main outlet';
-    outletMarker=new maplibregl.Marker({element:el,anchor:'bottom'}).setLngLat([xToLng(x0+ox+.5,z),yToLat(y0+oy+.5,z)]).addTo(map);
-  }
-  buildOverlays();
-  setStatus('');
-  if(rainOn) startRain();
-}
-
-function setStatus(t){ $('status').textContent=t; $('status').classList.toggle('hide',!t); }
-
-/* ---------- overlays ---------- */
-function rampColor(t){
-  for(let k=1;k<ELEV_RAMP.length;k++){if(t<=ELEV_RAMP[k][0]){const a=ELEV_RAMP[k-1],b=ELEV_RAMP[k],f=(t-a[0])/(b[0]-a[0]);return a[1].map((v,j)=>v+(b[1][j]-v)*f);}}
-  return ELEV_RAMP[ELEV_RAMP.length-1][1];
-}
-function makeImage(fn){
-  const {W,H}=grid, c=document.createElement('canvas'); c.width=W; c.height=H;
-  const x=c.getContext('2d'), im=x.createImageData(W,H);
-  for(const i of grid.cells){const v=fn(i);if(v){im.data.set(v,i*4);}}
-  x.putImageData(im,0,0); return c.toDataURL();
-}
-function chanThreshold(){ // contributing area in m² for a cell to count as a flow path
-  return 300*Math.pow(1.6,10-(+$('chanThr').value));
-}
-function chanImage(){
-  const thr=chanThreshold(), a2=grid.cs*grid.cs, lmin=Math.log(thr), lmax=Math.log(thr*80);
-  return makeImage(i=>{const ar=grid.A[i]*a2;if(ar<thr)return null;const t=Math.min(1,(Math.log(ar)-lmin)/(lmax-lmin));return [Math.round(60+150*t),Math.round(170+70*t),255,Math.round(140+115*t)];});
-}
-function buildOverlays(){
-  const g=grid, span=Math.max(g.mx-g.mn,0.3);
-  const elevURL=makeImage(i=>{const c=rampColor((g.S[i]-g.mn)/span);return [c[0]|0,c[1]|0,c[2]|0,200];});
-  const pondURL=makeImage(i=>{const d=g.P[i];if(d<=0.05)return null;const t=Math.min(1,d/0.4);return [20,90+60*(1-t)|0,230,150+100*t|0];});
-  const add=(id,url,vis,op)=>{
-    map.addSource(id,{type:'image',url,coordinates:g.coords});
-    map.addLayer({id,type:'raster',source:id,layout:{visibility:vis?'visible':'none'},paint:{'raster-opacity':op,'raster-fade-duration':0,'raster-resampling':id==='ov-elev'?'linear':'nearest'}},'mask');
-  };
-  add('ov-elev',elevURL,$('tElev').checked,.8);
-  add('ov-chan',chanImage(),$('tChan').checked,1);
-  add('ov-pond',pondURL,$('tPond').checked,.9);
-  // rain canvas
-  const sc=Math.max(1,Math.min(3,Math.floor(1400/Math.max(g.W,g.H))));
-  const rc=document.createElement('canvas'); rc.width=g.W*sc; rc.height=g.H*sc;
-  g.rc=rc; g.sc=sc;
-  map.addSource('ov-rain',{type:'canvas',canvas:rc,coordinates:g.coords,animate:true});
-  map.addLayer({id:'ov-rain',type:'raster',source:'ov-rain',layout:{visibility:rainOn?'visible':'none'},paint:{'raster-fade-duration':0}},'mask');
-  if(!rainOn) map.getSource('ov-rain').pause();
-}
-function clearAnalysis(){
-  stopRainLoop();
-  ['ov-rain','ov-pond','ov-chan','ov-elev'].forEach(id=>{if(map.getLayer(id))map.removeLayer(id);if(map.getSource(id))map.removeSource(id);});
-  if(outletMarker){outletMarker.remove();outletMarker=null;}
-  grid=null; particles=null;
-  if($('stats')) $('stats').innerHTML='';
-}
-
-/* ---------- rain particles ---------- */
-function spawn(p,k){
-  const g=grid, c=g.cells[(Math.random()*g.cells.length)|0], x=c%g.W, y=(c-x)/g.W;
-  p.x[k]=x+Math.random(); p.y[k]=y+Math.random(); p.age[k]=0; p.life[k]=120+Math.random()*260;
-}
-function initParticles(){
-  const n=+$('rainAmt').value;
-  particles={n,x:new Float32Array(n),y:new Float32Array(n),age:new Float32Array(n),life:new Float32Array(n)};
-  for(let k=0;k<n;k++){spawn(particles,k);particles.age[k]=Math.random()*particles.life[k];}
-}
-function grad(x,y){
-  const g=grid, W=g.W, H=g.H;
-  const fx=Math.min(Math.max(x-.5,0),W-1.001), fy=Math.min(Math.max(y-.5,0),H-1.001);
-  const ix=fx|0, iy=fy|0, tx=fx-ix, ty=fy-iy, i=iy*W+ix;
-  const b=(A)=>A[i]*(1-tx)*(1-ty)+A[i+1]*tx*(1-ty)+A[i+W]*(1-tx)*ty+A[i+W+1]*tx*ty;
-  return [b(g.GX),b(g.GY)];
-}
-function rainFrame(){
-  const g=grid; if(!g||!rainOn) return;
-  const p=particles, ctx=g.rc.getContext('2d'), sc=g.sc;
-  ctx.globalCompositeOperation='destination-out'; ctx.fillStyle='rgba(0,0,0,0.07)'; ctx.fillRect(0,0,g.rc.width,g.rc.height);
-  ctx.globalCompositeOperation='source-over'; ctx.strokeStyle='rgba(150,215,255,0.95)'; ctx.lineWidth=Math.max(1,sc*.7); ctx.lineCap='round';
-  ctx.beginPath();
-  for(let k=0;k<p.n;k++){
-    let x=p.x[k], y=p.y[k];
-    const [gx,gy]=grad(x,y), m=Math.hypot(gx,gy);
-    let nx,ny;
-    if(m<2e-4){ nx=x+(Math.random()-.5)*.12; ny=y+(Math.random()-.5)*.12; }
-    else { const v=Math.min(1.1,.12+28*m); nx=x-gx/m*v+(Math.random()-.5)*.06; ny=y-gy/m*v+(Math.random()-.5)*.06; }
-    const ix=nx|0, iy=ny|0;
-    if(++p.age[k]>p.life[k]||ix<0||iy<0||ix>=g.W||iy>=g.H||!g.M[iy*g.W+ix]){ spawn(p,k); continue; }
-    ctx.moveTo(x*sc,y*sc); ctx.lineTo(nx*sc+.01,ny*sc); p.x[k]=nx; p.y[k]=ny;
-  }
-  ctx.stroke();
-  rainRAF=requestAnimationFrame(rainFrame);
-}
-function startRain(){
-  if(!grid) return;
-  initParticles();
-  map.setLayoutProperty('ov-rain','visibility','visible');
-  map.getSource('ov-rain').play();
-  cancelAnimationFrame(rainRAF); rainRAF=requestAnimationFrame(rainFrame);
-}
-function stopRainLoop(){ cancelAnimationFrame(rainRAF); rainRAF=0; }
-function stopRain(){
-  rainOn=false; $('tRain').checked=false; stopRainLoop(); $('rainWrap').classList.add('hide');
-  if(map.getLayer('ov-rain')){ map.setLayoutProperty('ov-rain','visibility','none'); map.getSource('ov-rain').pause(); const c=grid&&grid.rc; if(c) c.getContext('2d').clearRect(0,0,c.width,c.height); }
-}
-
-/* ---------- controls ---------- */
-function apply3D(){
-  const on=$('t3d').checked;
-  $('exWrap').classList.toggle('hide',!on);
-  if(on){ map.setTerrain({source:'dem',exaggeration:+$('ex').value}); if(map.getPitch()<20 && mode==='field') map.easeTo({pitch:55}); }
-  else { map.setTerrain(null); map.easeTo({pitch:0}); }
-}
-$('t3d').onchange=apply3D;
-$('ex').oninput=()=>{ $('exOut').textContent=$('ex').value+'×'; if($('t3d').checked) map.setTerrain({source:'dem',exaggeration:+$('ex').value}); };
-$('tRain').onchange=()=>{ if($('tRain').checked){ rainOn=true; $('rainWrap').classList.remove('hide'); startRain(); } else stopRain(); };
-$('rainAmt').oninput=()=>{ const v=+$('rainAmt').value; $('rainOut').textContent=(v/1000).toFixed(1)+'k'; };
-$('rainAmt').onchange=()=>{ if(rainOn) initParticles(); };
-const vis=(id,on)=>{ if(map.getLayer(id)) map.setLayoutProperty(id,'visibility',on?'visible':'none'); };
-$('tChan').onchange=()=>{ vis('ov-chan',$('tChan').checked); $('chanWrap').classList.toggle('hide',!$('tChan').checked); };
-$('chanThr').oninput=()=>{ $('chanOut').textContent=$('chanThr').value; };
-$('chanThr').onchange=()=>{ if(grid&&map.getSource('ov-chan')) map.getSource('ov-chan').updateImage({url:chanImage(),coordinates:grid.coords}); };
-$('tPond').onchange=()=>vis('ov-pond',$('tPond').checked);
-$('tElev').onchange=()=>{ vis('ov-elev',$('tElev').checked); $('legend').classList.toggle('hide',!$('tElev').checked); };
-$('tRoads').onchange=()=>{ vis('roads',$('tRoads').checked); vis('places',$('tRoads').checked); };
-$('rainWrap').classList.add('hide');
-/* ---------- install as app ---------- */
-if('serviceWorker' in navigator && location.protocol==='https:') navigator.serviceWorker.register('sw.js').catch(()=>{});
-const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
-const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
-let deferred=null;
-const showInstall=(msg,btn)=>{ if(standalone||store.get('ftf-noinstall')) return; $('installMsg').textContent=msg; $('installBtn').classList.toggle('hide',!btn); $('install').classList.remove('hide'); };
-addEventListener('beforeinstallprompt',e=>{ e.preventDefault(); deferred=e; showInstall('Install Field Flow on your home screen.',true); });
-$('installBtn').onclick=async()=>{ if(!deferred) return; deferred.prompt(); await deferred.userChoice.catch(()=>{}); deferred=null; $('install').classList.add('hide'); };
-$('installX').onclick=()=>{ $('install').classList.add('hide'); store.set('ftf-noinstall',1); };
-if(isIOS && !standalone) showInstall('To install: tap Share, then “Add to Home Screen.”',false);
-}
-</script>
+<script src="engine.js"></script>
+<script src="app.js"></script>
 </body>
+</html>
