@@ -1,6 +1,6 @@
 // AcreFlow service worker: app files cached for fast launch and updated from the network; map tiles stay live.
-const SHELL = 'acreflow-v13';
-const FILES = ['./', 'index.html', 'app.js?v=13', 'engine.js?v=13', 'pdf-lib.min.js', 'vendor/maplibre-gl.js', 'vendor/maplibre-gl.css',
+const SHELL = 'acreflow-v14';
+const FILES = ['./', 'index.html', 'app.js?v=14', 'engine.js?v=14', 'pdf-lib.min.js', 'vendor/maplibre-gl.js', 'vendor/maplibre-gl.css',
   'manifest.json', 'logo.svg', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(SHELL).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {

@@ -100,6 +100,8 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
 .prod-avg{display:flex;gap:12px;align-items:center;background:rgba(255,255,255,.05);border-radius:10px;padding:8px 10px;margin:6px 0}.prod-avg b{font-size:24px;white-space:nowrap}.prod-avg span{color:var(--mute);font-size:13px;line-height:1.25}
 .key{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--mute);margin-top:8px}
 .key i{display:inline-block;width:18px;height:4px;border-radius:2px;vertical-align:middle;margin-right:5px}
+.pp{font-size:13px;color:#14181a;line-height:1.35}.pp b{display:block;font-size:14px;margin-bottom:4px;padding-right:22px}.pp div{overflow-wrap:anywhere}.pp span{color:#5a6460}.pp .btn{margin-top:8px;width:100%;height:40px}
+.maplibregl-popup-close-button{width:32px;height:32px;font-size:20px}
 .hide{display:none!important}
 .status{color:var(--warn);font-size:14px;margin:0 0 8px}
 .vtx{width:22px;height:22px;border-radius:50%;background:var(--green);border:3px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.6);cursor:grab}
@@ -176,6 +178,11 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
             <div class="tog"><label for="tElev">Elevation colors<small>Low to high across the field</small></label><input type="checkbox" class="sw" id="tElev"></div>
             <div id="legend" class="hide"><div class="legend" id="legBar"></div><div class="legend-l"><span id="legLo"></span><span id="legHi"></span></div></div>
             <div class="tog"><label for="tRoads">Roads &amp; labels</label><input type="checkbox" class="sw" id="tRoads" checked></div>
+            <div class="tog"><label for="tPlss">Section lines<small>Public land survey sections (Illinois)</small></label><input type="checkbox" class="sw" id="tPlss" checked></div>
+            <div class="tog"><label for="tParcels">Property lines<small>Parcels from a county file you load</small></label><input type="checkbox" class="sw" id="tParcels" checked></div>
+            <p class="hint" id="parcelMsg" style="font-size:13px;margin:0 0 8px"></p>
+            <div class="row"><button class="btn" id="parcelLoad" type="button">Load parcel file</button><button class="btn hide" id="parcelClear" type="button">Remove</button></div>
+            <input type="file" id="parcelFile" accept=".kml,.kmz,.geojson,.json,.zip,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz,application/geo+json,application/json" class="hide">
           </div>
           <div class="row" style="margin-top:10px">
             <button class="btn" id="editField">Edit corners</button>
@@ -209,7 +216,7 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
 </div>
 
 <script src="vendor/maplibre-gl.js"></script>
-<script src="engine.js?v=13"></script>
-<script src="app.js?v=13"></script>
+<script src="engine.js?v=14"></script>
+<script src="app.js?v=14"></script>
 </body>
 </html>

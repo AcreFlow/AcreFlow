@@ -1,7 +1,7 @@
 /* AcreFlow app: map, field drawing, overlays, rain, dirt work plan, report export. */
 {
 'use strict';
-const VERSION = '13';
+const VERSION = '14';
 const $ = id => document.getElementById(id);
 const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
 const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
@@ -9,6 +9,8 @@ const E = FieldEngine, { FT, ACRE, rampColor, ELEV_RAMP } = E;
 
 const store = { get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
 const saved = store.get('ftf-view');
+if (store.get('ftf-plss') === false) $('tPlss').checked = false;
+if (store.get('ftf-parcels') === false) $('tParcels').checked = false;
 $('ver').textContent = 'AcreFlow v' + VERSION;
 
 const map = new maplibregl.Map({
@@ -110,7 +112,16 @@ map.on('load', () => {
   map.addSource('mask', { type: 'geojson', data: empty });
   map.addSource('draft', { type: 'geojson', data: empty });
   map.addSource('plan', { type: 'geojson', data: empty });
+  // section lines (Illinois PLSS, ISGS) and property lines the owner loads from a county file
+  map.addSource('plss', { type: 'raster', tileSize: 256, minzoom: 10, attribution: 'Section lines: Illinois State Geological Survey',
+    tiles: ['https://data.isgs.illinois.edu/arcgis/rest/services/Reference/PLSS_Sections/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&size=512,512&dpi=192&format=png32&transparent=true&f=image'] });
+  map.addLayer({ id: 'plss', type: 'raster', source: 'plss', minzoom: 11, layout: { visibility: $('tPlss').checked ? 'visible' : 'none' }, paint: { 'raster-fade-duration': 0 } });
+  map.addSource('parcels', { type: 'geojson', data: empty });
+  map.addLayer({ id: 'parcel-hit', type: 'fill', source: 'parcels', layout: { visibility: $('tParcels').checked ? 'visible' : 'none' }, paint: { 'fill-color': '#ffd23f', 'fill-opacity': 0.01 } });
+  map.addLayer({ id: 'parcel-line', type: 'line', source: 'parcels', layout: { visibility: $('tParcels').checked ? 'visible' : 'none' }, paint: { 'line-color': '#ffd23f', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 1, 16, 2.5], 'line-opacity': .9 } });
   map.addLayer({ id: 'mask', type: 'fill', source: 'mask', paint: { 'fill-color': '#000', 'fill-opacity': .45 } });
+  map.on('click', 'parcel-hit', parcelTap);
+  loadSavedParcels();
   map.addLayer({ id: 'field-line', type: 'line', source: 'field', paint: { 'line-color': '#fff', 'line-width': 2.5 } });
   map.addLayer({ id: 'draft-fill', type: 'fill', source: 'draft', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#a4c639', 'fill-opacity': .15 } });
   map.addLayer({ id: 'draft-line', type: 'line', source: 'draft', paint: { 'line-color': '#a4c639', 'line-width': 3 } });
@@ -127,6 +138,99 @@ map.on('load', () => {
 });
 const PLAN_LAYERS = ['plan-case', 'plan-old', 'plan-trees', 'plan-new', 'plan-tile', 'plan-tags'];
 const vis = (id, on) => { if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none'); };
+
+/* ---------- property lines: load a county file (KML, KMZ or GeoJSON in latitude/longitude) ---------- */
+const idb = (() => {
+  let dbp = null;
+  const open = () => dbp || (dbp = new Promise((res, rej) => { const r = indexedDB.open('acreflow', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }));
+  const tx = (m, fn) => open().then(db => new Promise((res, rej) => { const t = db.transaction('kv', m), q = fn(t.objectStore('kv')); t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error); }));
+  return { get: k => tx('readonly', s => s.get(k)).catch(() => null), set: (k, v) => tx('readwrite', s => s.put(v, k)).catch(() => null), del: k => tx('readwrite', s => s.delete(k)).catch(() => null) };
+})();
+let parcelInfo = null;
+function setParcels(fcol, info) {
+  map.getSource('parcels').setData(fcol || empty);
+  parcelInfo = fcol ? info : null;
+  $('parcelMsg').textContent = parcelInfo ? `${parcelInfo.n.toLocaleString()} parcels from ${parcelInfo.name}. Tap one to see it or use it as your field.` : 'No property lines loaded. Get a KML or GeoJSON file of parcels from the county GIS office, then load it here.';
+  $('parcelClear').classList.toggle('hide', !parcelInfo);
+}
+async function loadSavedParcels() { const s = await idb.get('parcels'); if (s && s.fc) setParcels(s.fc, s.info); else setParcels(null); }
+async function unzipFirst(buf, re) {             // smallest possible zip reader: finds one entry and inflates it
+  const v = new DataView(buf); let e = buf.byteLength - 22;
+  while (e >= 0 && v.getUint32(e, true) !== 0x06054b50) e--;
+  if (e < 0) throw new Error('not a zip file');
+  let p = v.getUint32(e + 16, true); const n = v.getUint16(e + 10, true), dec = new TextDecoder();
+  for (let i = 0; i < n; i++) {
+    const method = v.getUint16(p + 10, true), csize = v.getUint32(p + 20, true), nl = v.getUint16(p + 28, true), xl = v.getUint16(p + 30, true), cl = v.getUint16(p + 32, true), off = v.getUint32(p + 42, true);
+    const name = dec.decode(new Uint8Array(buf, p + 46, nl)); p += 46 + nl + xl + cl;
+    if (!re.test(name)) continue;
+    const start = off + 30 + v.getUint16(off + 26, true) + v.getUint16(off + 28, true), data = new Uint8Array(buf, start, csize);
+    if (method === 0) return dec.decode(data);
+    if (method !== 8 || typeof DecompressionStream === 'undefined') throw new Error('this phone cannot open that compressed file; use KML or GeoJSON');
+    return await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text();
+  }
+  throw new Error('no ' + re.source + ' file inside');
+}
+function kmlToFeatures(text) {
+  const doc = new DOMParser().parseFromString(text, 'application/xml'), out = [];
+  const coords = el => el ? el.textContent.trim().split(/\s+/).map(t => t.split(',').map(Number)).filter(c => c.length >= 2 && isFinite(c[0]) && isFinite(c[1])).map(c => [c[0], c[1]]) : [];
+  for (const pm of doc.getElementsByTagName('Placemark')) {
+    const props = {}, nm = pm.getElementsByTagName('name')[0];
+    if (nm) props.name = nm.textContent.trim();
+    for (const d of pm.getElementsByTagName('SimpleData')) props[d.getAttribute('name')] = d.textContent.trim();
+    for (const d of pm.getElementsByTagName('Data')) { const val = d.getElementsByTagName('value')[0]; if (val) props[d.getAttribute('name')] = val.textContent.trim(); }
+    const desc = pm.getElementsByTagName('description')[0];
+    if (desc && Object.keys(props).length < 2) { const t = desc.textContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(); if (t) props.description = t.slice(0, 300); }
+    for (const pg of pm.getElementsByTagName('Polygon')) {
+      const outer = pg.getElementsByTagName('outerBoundaryIs')[0], ring = coords(outer && outer.getElementsByTagName('coordinates')[0]);
+      if (ring.length >= 3) out.push({ type: 'Feature', properties: props, geometry: { type: 'Polygon', coordinates: [ring] } });
+    }
+  }
+  return out;
+}
+function cleanGeoJSON(gj) {
+  const feats = gj.type === 'FeatureCollection' ? gj.features : gj.type === 'Feature' ? [gj] : [];
+  const out = [];
+  for (const f of feats) {
+    const g = f && f.geometry; if (!g) continue;
+    const polys = g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : [];
+    for (const p of polys) if (p && p[0] && p[0].length >= 3) out.push({ type: 'Feature', properties: f.properties || {}, geometry: { type: 'Polygon', coordinates: [p[0].map(c => [+c[0], +c[1]])] } });
+  }
+  return out;
+}
+$('parcelLoad').onclick = () => $('parcelFile').click();
+$('parcelFile').onchange = async () => {
+  const f = $('parcelFile').files[0]; $('parcelFile').value = ''; if (!f) return;
+  $('parcelMsg').textContent = 'Reading ' + f.name + '…';
+  try {
+    const buf = await f.arrayBuffer(), low = f.name.toLowerCase(); let feats;
+    if (low.endsWith('.kmz')) feats = kmlToFeatures(await unzipFirst(buf, /\.kml$/i));
+    else if (low.endsWith('.kml')) feats = kmlToFeatures(new TextDecoder().decode(buf));
+    else if (low.endsWith('.zip')) throw new Error('shapefiles are not supported yet; ask the county for KML or GeoJSON');
+    else feats = cleanGeoJSON(JSON.parse(new TextDecoder().decode(buf)));
+    if (!feats.length) throw new Error('no parcel shapes found in that file');
+    const c0 = feats[0].geometry.coordinates[0][0];
+    if (Math.abs(c0[0]) > 180 || Math.abs(c0[1]) > 90) throw new Error('the file is in a survey projection (state plane), not latitude/longitude; ask the county to export it in WGS84');
+    const fcol = fc(feats), info = { n: feats.length, name: f.name };
+    setParcels(fcol, info); idb.set('parcels', { fc: fcol, info });
+    if (!$('tParcels').checked) { $('tParcels').checked = true; ['parcel-hit', 'parcel-line'].forEach(l => vis(l, true)); }
+    let b = [180, 90, -180, -90]; for (const ft of feats) for (const c of ft.geometry.coordinates[0]) b = [Math.min(b[0], c[0]), Math.min(b[1], c[1]), Math.max(b[2], c[0]), Math.max(b[3], c[1])];
+    if (!field) map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, duration: 800 });
+  } catch (e) { $('parcelMsg').textContent = 'Could not load that file: ' + e.message + '.'; }
+};
+$('parcelClear').onclick = () => { idb.del('parcels'); setParcels(null); };
+let parcelPopup = null;
+function parcelTap(e) {
+  if (mode === 'draw' || !e.features || !e.features[0]) return;
+  if (map.queryRenderedFeatures(e.point, { layers: ['plan-tags'] }).length) return;
+  const f = e.features[0], ring = f.geometry.coordinates[0].map(c => [c[0], c[1]]);
+  if (ring.length > 3 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1]) ring.pop();
+  const props = Object.entries(f.properties || {}).filter(([k, v]) => v !== '' && v != null && !/^(shape|objectid|fid|globalid)/i.test(k)).slice(0, 6);
+  const el = document.createElement('div'); el.className = 'pp';
+  el.innerHTML = `<b>${polyAcres(ring).toFixed(1)} acres (mapped)</b>` + props.map(([k, v]) => `<div><span>${esc(k)}</span> ${esc(String(v).slice(0, 80))}</div>`).join('') + '<button class="btn primary sm" type="button">Use as field</button>';
+  el.querySelector('button').onclick = () => { if (parcelPopup) parcelPopup.remove(); if (ring.length >= 3) { setRain(false); setField(ring, true); } };
+  if (parcelPopup) parcelPopup.remove();
+  parcelPopup = new maplibregl.Popup({ closeButton: true, maxWidth: '260px' }).setLngLat(e.lngLat).setDOMContent(el).addTo(map);
+}
 
 /* ---------- search & locate ---------- */
 $('searchForm').addEventListener('submit', async e => {
@@ -700,6 +804,8 @@ $('tProd').onchange = () => { vis('ov-prod', $('tProd').checked); showProd(); };
 $('prodMetric').value = store.get('ftf-prod') || 'pi';
 $('prodMetric').onchange = () => { store.set('ftf-prod', prodKey()); buildProdOverlay(); showProd(); };
 $('tElev').onchange = () => { vis('ov-elev', $('tElev').checked); $('legend').classList.toggle('hide', !$('tElev').checked); };
+$('tPlss').onchange = () => { vis('plss', $('tPlss').checked); store.set('ftf-plss', $('tPlss').checked); };
+$('tParcels').onchange = () => { ['parcel-hit', 'parcel-line'].forEach(l => vis(l, $('tParcels').checked)); store.set('ftf-parcels', $('tParcels').checked); };
 $('tRoads').onchange = () => { vis('roads', $('tRoads').checked); vis('places', $('tRoads').checked); };
 
 /* ---------- report ---------- */
