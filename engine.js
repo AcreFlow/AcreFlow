@@ -10,7 +10,8 @@ const WW_LEVELS = [8, 5, 3, 2, 1];            // acres draining to a flow path b
 const LOW_LEVELS = [                           // ponding depth (m), area (ac) and volume (CY) before a low spot is flagged
   { d: 0.08, a: 0.10, v: 20 }, { d: 0.05, a: 0.05, v: 10 }, { d: 0.03, a: 0.03, v: 4 }, { d: 0.02, a: 0.02, v: 2 }];
 const DEFAULT_TUNE = { ww: 3, low: 2 };
-const KICK_OUT = 0.2;                         // share of a flow path showing grass or trees that drops it from the recommendations
+const KICK_GRASS = 0.5, KICK_TREES = 0.3;      // share of a flow path clearly grassed / wooded on the photo that drops it from the recommendations
+const BRANCH_FT = 300;                        // a branch this long gets its own waterway item
 const WET_PCT = [0.04, 0.08, 0.12, 0.18];      // share of the field treated as its wettest-lying ground, by low-spot sensitivity
 const ELEV_RAMP = [[0, [38, 120, 170]], [.25, [70, 170, 140]], [.5, [220, 215, 90]], [.75, [230, 140, 50]], [1, [170, 50, 40]]];
 
@@ -186,21 +187,28 @@ function findWaterways(g, thrAc) {
     }
     segs.push({ pts, joins, len, head: h, exit: c });
   }
-  const root = s => { let r = s, guard = 0; while (segs[r].joins >= 0 && guard++ < 1e4) r = segs[r].joins; return r; };
-  const sys = new Map();
-  segs.forEach((s, k) => { const r = root(k); if (!sys.has(r)) sys.set(r, []); sys.get(r).push(s); });
+  // one waterway per branch long enough to need its own work; short spurs ride along with the branch they feed
+  const owner = new Int32Array(segs.length).fill(-1), groups = [];
+  segs.forEach((s, k) => {
+    if (s.joins < 0 || s.len * FT >= BRANCH_FT) { owner[k] = groups.length; groups.push({ main: s, list: [s], parent: s.joins < 0 ? -1 : owner[s.joins] }); }
+    else { owner[k] = owner[s.joins]; groups[owner[k]].list.push(s); }
+  });
   const out = [];
-  for (const [r, list] of sys) {
-    const main = segs[r], exit = main.exit;
-    const lenFt = list.reduce((t, s) => t + s.len, 0) * FT;
-    if (lenFt < 120) continue;
-    const drop = S[main.head] - S[exit];
-    out.push({ segs: list, lenFt, mainFt: main.len * FT, drainAc: A[exit] * g.cellAc,
-      slopePct: main.len > 0 ? Math.max(0, drop / main.len * 100) : 0, exit, exitLL: ll(g, exit),
-      mid: main.pts[Math.floor(main.pts.length / 2)], main: main.pts, quarter: main.pts[Math.floor(main.pts.length / 4)] });
-  }
+  groups.forEach((gr, gi) => {
+    const main = gr.main, root = gr.parent < 0, n = main.pts.length;
+    const end = root ? main.exit : main.pts[Math.max(0, n - 2)], at = root ? main.exit : main.pts[n - 1];
+    const lenFt = gr.list.reduce((t, s) => t + s.len, 0) * FT;
+    if (lenFt < 120) return;
+    const drainAc = A[end] * g.cellAc, slopePct = main.len > 0 ? Math.max(0, (S[main.head] - S[end]) / main.len * 100) : 0;
+    const power = drainAc * slopePct;                     // relative gully risk: more water moving faster
+    out.push({ segs: gr.list, lenFt, mainFt: main.len * FT, drainAc, slopePct, root, gi, parentGi: gr.parent,
+      risk: power >= 40 || (drainAc >= 10 && slopePct >= 1.5) ? 'high' : power >= 10 ? 'moderate' : 'low',
+      exit: at, exitLL: ll(g, at), mid: main.pts[Math.floor(n / 2)], main: main.pts, quarter: main.pts[Math.floor(n / 4)] });
+  });
   out.sort((a, b) => b.drainAc - a.drainAc);
   out.forEach((w, k) => w.label = 'W' + (k + 1));
+  const byGi = new Map(out.map(w => [w.gi, w]));
+  out.forEach(w => { const p = byGi.get(w.parentGi); w.parentLabel = p ? p.label : null; });
   return out;
 }
 
@@ -271,7 +279,7 @@ function prodAvg(g, key) {
 const prodLine = u => Object.keys(PROD).filter(k => u[k] != null).map(k => `${PROD[k].label} ${PROD[k].fmt(u[k])}`).join(', ');
 function applySoils(g, soil) {
   g.soil = soil || null;
-  if (soil) { soil.units.forEach(u => { u.acres = 0; }); for (const i of g.cells) { const k = soil.cellUnit[i]; if (k >= 0) soil.units[k].acres += g.cellAc; } }
+  if (soil) { const sc = g.fieldAc / (g.cells.length * g.cellAc) || 1; soil.units.forEach(u => { u.acres = 0; }); for (const i of g.cells) { const k = soil.cellUnit[i]; if (k >= 0) soil.units[k].acres += g.cellAc * sc; } }
   retune(g, g.tune);
 }
 // rasterize soil polygons (rings in grid coordinates) onto the grid; polys: [{ unit: index, rings: [[[x,y],...],...] }]
@@ -440,7 +448,8 @@ function checkWaterways(g, img) {
     }
     if (total <= 0 || checked / total < 0.4) { w.check = { status: 'unchecked' }; continue; }
     const cover = (grass + wood) / checked, treeShare = wood / checked;       // cover = share that needs no waterway work
-    w.check = { status: cover >= KICK_OUT ? (treeShare >= cover / 2 ? 'wooded' : 'existing') : 'none', cover, treeShare,
+    const grassShare = grass / checked;
+    w.check = { status: treeShare >= KICK_TREES ? 'wooded' : grassShare >= KICK_GRASS ? 'existing' : 'none', cover, treeShare,
       grassFt: w.lenFt * grass / checked, treeFt: w.lenFt * treeShare, bareFt: w.lenFt * (1 - cover) };
   }
 }
@@ -459,7 +468,7 @@ function waterwayRuns(g, w, o) {
   return w.segs.filter(s => s.pts.length > 1).map(s => ({ kind: 'new', pts: s.pts }));
 }
 // a tile main is offered along every flow path except wooded ones, unless the owner leaves it out
-function mainOn(w, ov) { return ov['T' + w.label.slice(1)] !== 'skip' && ov[w.label] !== 'skip' && wwStatus(w, ov[w.label]) !== 'wooded'; }
+function mainOn(w, ov) { return w.root && ov['T' + w.label.slice(1)] !== 'skip' && ov[w.label] !== 'skip' && wwStatus(w, ov[w.label]) !== 'wooded'; }
 function chaikin(pts, n) {
   for (let it = 0; it < n; it++) {
     if (pts.length < 3) return pts;
@@ -679,7 +688,7 @@ function workItems(g, ov) {
     const pct = c.cover != null ? Math.round(c.cover * 100) : null;
     const build = `shape a broad, parabolic channel along this path, seed it and protect it until the stand establishes (NRCS Practice 412). Size the width and depth for the ${f1(w.drainAc)}-acre drainage area with the contractor or the county SWCD/NRCS office. Where the bottom stays wet, add a tile line along one side, offset from the center, so the waterway can be established and mowed.`;
     const treeNote = c.treeFt > 60 && !owner ? ` About ${f0(c.treeFt)} ft of this path runs through trees (brown on the map) and is left alone.` : '';
-    const steep = w.slopePct >= 2 ? ' At 2% or more slope this path has a higher gully risk; treat it as a priority.' : '';
+    const steep = w.risk === 'high' ? ` High gully risk: ${f1(w.drainAc)} acres moving at ${f1(w.slopePct)}% slope. Do this one first.` : w.risk === 'moderate' ? ' Moderate gully risk.' : '';
     let recTitle, rec, short;
     if (st === 'wooded') {
       recTitle = 'Wooded draw: no waterway recommended';
@@ -694,16 +703,18 @@ function workItems(g, ov) {
       rec = `The aerial photo shows a grassed strip along about ${pct}% of this path (roughly ${f0(c.grassFt)} ft, green on the map). About ${f0(c.bareFt)} ft shows no grass (blue on the map). On the bare stretches, ` + build + steep + treeNote;
       short = `Partly grassed (${pct}%): extend about ${f0(c.bareFt)} ft`;
     } else {
-      recTitle = 'Build a grassed waterway';
+      recTitle = 'Build a grassed waterway' + (w.risk === 'high' ? ' (priority)' : '');
       rec = (st === 'unchecked' ? 'The aerial photo could not be checked for this path, so confirm in the field that no waterway exists. ' : owner ? '' : 'No grassed strip shows on the aerial photo along this path. ') +
         build.charAt(0).toUpperCase() + build.slice(1) + steep + ' Check the outlet where it leaves the field for erosion and keep it stable.' + treeNote;
-      short = st === 'unchecked' ? 'Needs waterway (photo not checked)' : 'Needs waterway: ' + f0(w.lenFt) + ' ft';
+      short = (st === 'unchecked' ? 'Needs waterway (photo not checked)' : 'Needs waterway: ' + f0(w.lenFt) + ' ft') + (w.risk !== 'low' ? ` · ${w.risk} gully risk` : '');
     }
-    items.push({ id: w.label, type: 'ww', kind: st === 'existing' ? 'Existing grassed waterway' : st === 'wooded' ? 'Wooded draw' : 'Concentrated flow path', status: st, existing: noWork(st), where: 'Leaves field at ' + fll(w.exitLL),
+    items.push({ id: w.label, type: 'ww', kind: st === 'existing' ? 'Existing grassed waterway' : st === 'wooded' ? 'Wooded draw' : 'Concentrated flow path', status: st, existing: noWork(st), risk: w.risk, where: (w.parentLabel ? `Joins ${w.parentLabel} at ` : 'Leaves field at ') + fll(w.exitLL),
       size: `${f0(w.lenFt)} ft in field, drains ${f1(w.drainAc)} ac, ${f1(w.slopePct)}% average slope`,
       recTitle, rec, more: [], short, line: `${f0(w.lenFt)} ft, drains ${f1(w.drainAc)} ac` });
   }
-  return items;
+  // waterways first, highest gully risk on top; then low spots, pattern tile, mains
+  const rank = it => ({ ww: 0, low: 1, wet: 2, main: 3 }[it.type] * 10 + (it.type === 'ww' ? { high: 0, moderate: 1, low: 2 }[it.risk] || 0 : 0));
+  return items.map((it, i) => [it, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(x => x[0]);
 }
 
 const soilRows = g => g.soil ? g.soil.units.filter(u => u.acres >= 0.05).sort((a, b) => b.acres - a.acres) : [];
@@ -844,6 +855,160 @@ async function buildPDF(g, opts) {
   return await doc.save();
 }
 
+/* ---------- soil & productivity report ---------- */
+function prodRamp(t) {
+  t = Math.max(0, Math.min(1, t));
+  const s = [[0, [200, 50, 40]], [.5, [235, 205, 70]], [1, [40, 150, 60]]];
+  for (let k = 1; k < s.length; k++) if (t <= s[k][0]) { const a = s[k - 1], b = s[k], f = (t - a[0]) / (b[0] - a[0]); return a[1].map((v, j) => Math.round(v + (b[1][j] - v) * f)); }
+  return s[2][1];
+}
+// colors from the lowest to the highest rating in this field (at least a 12-point PI spread, so near-equal soils stay near-equal)
+function soilColors(g, key) {
+  const P = PROD[key], units = g.soil.units, vals = units.filter(u => u.acres > 0 && u[key] != null).map(u => u[key]);
+  if (!P || !vals.length) return units.map(() => null);
+  const minSpan = (P.hi - P.lo) * 0.18; let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (hi - lo < minSpan) { const m = (hi + lo) / 2; lo = m - minSpan / 2; hi = m + minSpan / 2; }
+  return units.map(u => u[key] != null ? prodRamp((u[key] - lo) / (hi - lo)) : null);
+}
+function drawSoilMap(g, maxW, maxH, key, aerial) {
+  const { W, H, M, cells } = g, cu = g.soil.cellUnit, units = g.soil.units, P = PROD[key];
+  let bx0 = W, by0 = 1e9, bx1 = 0, by1 = 0;
+  for (const i of cells) { const x = i % W, y = (i - x) / W; bx0 = Math.min(bx0, x); bx1 = Math.max(bx1, x); by0 = Math.min(by0, y); by1 = Math.max(by1, y); }
+  bx0 = Math.max(0, bx0 - 4); by0 = Math.max(0, by0 - 4); bx1 = Math.min(W - 1, bx1 + 4); by1 = Math.min(H - 1, by1 + 4);
+  const cw = bx1 - bx0 + 1, chh = by1 - by0 + 1, k = Math.min(maxW / cw, maxH / chh);
+  const cv = document.createElement('canvas'); cv.width = Math.round(cw * k); cv.height = Math.round(chh * k);
+  const ctx = cv.getContext('2d'), U = Math.max(1, cv.width / 1500), B = Math.max(1, cv.width / 1600);
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+  const toPx = (gx, gy) => [(gx - bx0) * k, (gy - by0) * k];
+  const polyTrace = () => { g.poly.forEach((p, j) => { const q = toPx(p[0], p[1]); j ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); }); ctx.closePath(); };
+  if (aerial) { ctx.drawImage(aerial.canvas, bx0 * aerial.k, by0 * aerial.k, cw * aerial.k, chh * aerial.k, 0, 0, cv.width, cv.height); }
+  // soil fill (by the chosen rating, else by drainage) and lines between soils, at grid resolution
+  const col = soilColors(g, key);
+  const small = document.createElement('canvas'); small.width = cw; small.height = chh;
+  const sx = small.getContext('2d'), im = sx.createImageData(cw, chh);
+  for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) {
+    const i = y * W + x, o = ((y - by0) * cw + (x - bx0)) * 4, u = cu[i];
+    if (!M[i] || u < 0) continue;
+    const c = col[u] || [170, 170, 170];
+    im.data[o] = c[0]; im.data[o + 1] = c[1]; im.data[o + 2] = c[2]; im.data[o + 3] = aerial ? 120 : 200;
+  }
+  sx.putImageData(im, 0, 0); ctx.imageSmoothingEnabled = false; ctx.drawImage(small, 0, 0, cv.width, cv.height);
+  ctx.beginPath(); ctx.rect(0, 0, cv.width, cv.height); polyTrace(); ctx.fillStyle = 'rgba(255,255,255,.55)'; ctx.fill('evenodd');
+  ctx.strokeStyle = 'rgba(20,20,20,.85)'; ctx.lineWidth = 1.5 * U; ctx.beginPath();
+  for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) {
+    const i = y * W + x; if (!M[i]) continue;
+    if (x < W - 1 && M[i + 1] && cu[i + 1] !== cu[i]) { const p = toPx(x + 1, y); ctx.moveTo(p[0], p[1]); ctx.lineTo(p[0], p[1] + k); }
+    if (y < H - 1 && M[i + W] && cu[i + W] !== cu[i]) { const p = toPx(x, y + 1); ctx.moveTo(p[0], p[1]); ctx.lineTo(p[0] + k, p[1]); }
+  }
+  ctx.stroke();
+  ctx.beginPath(); polyTrace(); ctx.strokeStyle = '#111'; ctx.lineWidth = 3 * U; ctx.stroke();
+  // label each sizable patch of a soil at its most interior cell
+  const N = W * H, dist = new Float32Array(N), BIG = 1e6;
+  for (let i = 0; i < N; i++) dist[i] = M[i] && cu[i] >= 0 ? BIG : 0;
+  const same = (i, j) => M[j] && cu[j] === cu[i];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const i = y * W + x; if (!dist[i]) continue; let d = BIG; d = Math.min(d, x > 0 && same(i, i - 1) ? dist[i - 1] + 1 : 1, y > 0 && same(i, i - W) ? dist[i - W] + 1 : 1); dist[i] = d; }
+  for (let y = H - 1; y >= 0; y--) for (let x = W - 1; x >= 0; x--) { const i = y * W + x; if (!dist[i]) continue; dist[i] = Math.min(dist[i], x < W - 1 && same(i, i + 1) ? dist[i + 1] + 1 : 1, y < H - 1 && same(i, i + W) ? dist[i + W] + 1 : 1); }
+  const comp = new Int32Array(N).fill(-1), labels = [], minCells = Math.max(12, cells.length * 0.01);
+  for (const s0 of cells) {
+    if (comp[s0] >= 0 || cu[s0] < 0) continue;
+    const id = labels.length, st = [s0]; comp[s0] = id; let n = 0, best = s0;
+    while (st.length) { const c = st.pop(); n++; if (dist[c] > dist[best]) best = c; const x = c % W, y = (c - x) / W;
+      for (const [xx, yy] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) { if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; const j = yy * W + xx; if (comp[j] < 0 && same(s0, j)) { comp[j] = id; st.push(j); } } }
+    labels.push({ n, best, u: cu[s0] });
+  }
+  const fs = Math.max(26, Math.round(cv.width / 32));
+  ctx.font = `bold ${fs}px Helvetica, Arial, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const L of labels) {
+    if (L.n < minCells) continue;
+    const u = units[L.u], x = L.best % W, y = (L.best - x) / W, q = toPx(x + .5, y + .5), t = u.musym || '?';
+    ctx.lineWidth = 6 * U; ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.strokeText(t, q[0], q[1]); ctx.fillStyle = '#111'; ctx.fillText(t, q[0], q[1]);
+  }
+  // north arrow and scale
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.fillRect(cv.width - 64 * B, 10 * B, 54 * B, 70 * B);
+  ctx.fillStyle = '#111'; ctx.beginPath(); ctx.moveTo(cv.width - 37 * B, 18 * B); ctx.lineTo(cv.width - 50 * B, 52 * B); ctx.lineTo(cv.width - 37 * B, 45 * B); ctx.lineTo(cv.width - 24 * B, 52 * B); ctx.closePath(); ctx.fill();
+  ctx.font = `bold ${18 * B}px Helvetica, Arial, sans-serif`; ctx.textAlign = 'center'; ctx.fillText('N', cv.width - 37 * B, 72 * B);
+  const ftPerPx = g.cs * FT / k, target = cv.width * .25 * ftPerPx;
+  const nice = [50, 100, 200, 250, 500, 1000, 2000, 2500, 5000].reduce((a, b) => Math.abs(b - target) < Math.abs(a - target) ? b : a), barPx = nice / ftPerPx;
+  ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.fillRect(10 * B, cv.height - 52 * B, barPx + 30 * B, 42 * B);
+  ctx.fillStyle = '#111'; ctx.fillRect(20 * B, cv.height - 22 * B, barPx, 6 * B);
+  ctx.font = `${16 * B}px Helvetica, Arial, sans-serif`; ctx.textAlign = 'left'; ctx.fillText('0', 18 * B, cv.height - 30 * B);
+  ctx.textAlign = 'right'; ctx.fillText(nice.toLocaleString() + ' ft', 20 * B + barPx + 6 * B, cv.height - 30 * B);
+  return cv;
+}
+async function buildSoilPDF(g, opts) {
+  const { PDFDocument, StandardFonts, rgb } = global.PDFLib;
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica), bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const PW = 612, PH = 792, MG = 40, ink = rgb(.08, .08, .08), mute = rgb(.42, .42, .42), line = rgb(.82, .82, .82);
+  const san = s => String(s).replace(/[^\x20-\x7E]/g, c => ({ '–': '-', '—': '-', '’': "'", '×': 'x' }[c] || ''));
+  const wrap = (text, f, size, width) => { const words = san(text).split(/\s+/), out = []; let l = ''; for (const w of words) { const t = l ? l + ' ' + w : w; if (f.widthOfTextAtSize(t, size) > width && l) { out.push(l); l = w; } else l = t; } if (l) out.push(l); return out; };
+  let page = doc.addPage([PW, PH]), y = PH - MG;
+  const name = opts.name || 'Field', rows = soilRows(g), key = opts.key || 'pi';
+  if (opts.logo) { try { const lg = await doc.embedPng(opts.logo); page.drawImage(lg, { x: PW - MG - 36, y: PH - MG - 36, width: 36, height: 36 }); } catch (err) {} }
+  page.drawText('Soils and productivity', { x: MG, y: y - 20, size: 20, font: bold, color: ink }); y -= 28;
+  page.drawText(san(`${name}  |  ${opts.date}  |  ${f1(g.fieldAc)} acres  |  Field center ${fll(opts.center)}`), { x: MG, y: y - 10, size: 10, font, color: mute }); y -= 22;
+  // headline averages
+  const heads = [['pi', 'Illinois PI'], ['corn', 'Corn bu/ac'], ['soy', 'Soybean bu/ac'], ['nccpi', 'NCCPI']].map(([k, l]) => { const p = prodAvg(g, k); return p ? [l, PROD[k].fmt(p.v).replace(' bu', ''), p.share] : null; }).filter(Boolean);
+  const bw = (PW - MG * 2 - 8 * (heads.length - 1)) / Math.max(1, heads.length);
+  heads.forEach((h, i) => {
+    const x = MG + i * (bw + 8);
+    page.drawRectangle({ x, y: y - 46, width: bw, height: 46, color: rgb(.95, .96, .94) });
+    page.drawText(san(h[1]), { x: x + 10, y: y - 26, size: 20, font: bold, color: ink });
+    page.drawText(san(h[0] + (h[2] < .95 ? ` (${Math.round(h[2] * 100)}% rated)` : '')), { x: x + 10, y: y - 40, size: 8.5, font, color: mute });
+  });
+  if (heads.length) { y -= 52; page.drawText('Acre-weighted averages over the field as drawn.', { x: MG, y: y - 9, size: 8.5, font, color: mute }); y -= 18; }
+  // map
+  const mapKey = prodAvg(g, key) ? key : prodAvg(g, 'nccpi') ? 'nccpi' : key, sw = soilColors(g, mapKey);
+  const cv = drawSoilMap(g, 1600, 1400, mapKey, opts.aerial || null);
+  const img = await doc.embedJpg(cv.toDataURL('image/jpeg', .88));
+  const maxH = y - MG - 40, sc = Math.min((PW - MG * 2) / img.width, maxH / img.height), iw = img.width * sc, ih = img.height * sc, ix = MG + (PW - MG * 2 - iw) / 2;
+  page.drawImage(img, { x: ix, y: y - ih, width: iw, height: ih });
+  page.drawRectangle({ x: ix, y: y - ih, width: iw, height: ih, borderColor: mute, borderWidth: .5 });
+  y -= ih + 10;
+  const mk = prodAvg(g, key) ? key : prodAvg(g, 'nccpi') ? 'nccpi' : null;
+  for (const l of wrap(`Map: soil map units from the USDA soil survey, labeled by map symbol${mk ? `, shaded by ${PROD[mk].label} from the lowest (red) to the highest (green) rating in this field; colors match the swatches in the soil table` : ''}.` + (opts.aerial ? ' Aerial imagery: Esri, Maxar, Earthstar Geographics.' : ''), font, 8.5, PW - MG * 2)) { page.drawText(l, { x: MG, y: y - 9, size: 8.5, font, color: mute }); y -= 11; }
+
+  // table
+  page = doc.addPage([PW, PH]); y = PH - MG;
+  page.drawText('Soil map units in this field', { x: MG, y: y - 14, size: 14, font: bold, color: ink }); y -= 26;
+  const C = [{ t: 'Symbol', w: 46 }, { t: 'Soil', w: 186 }, { t: 'Acres', w: 40, r: 1 }, { t: '%', w: 30, r: 1 }, { t: 'IL PI', w: 42, r: 1 }, { t: 'Corn', w: 40, r: 1 }, { t: 'Soy', w: 36, r: 1 }, { t: 'NCCPI', w: 44, r: 1 }];
+  const colX = []; { let x = MG; for (const c of C) { colX.push(x); x += c.w + 8; } }
+  const cell = (c, i, txt, yy, f, sz, colr) => { const t = san(txt), w = f.widthOfTextAtSize(t, sz); page.drawText(t, { x: c.r ? colX[i] + c.w - w : colX[i], y: yy, size: sz, font: f, color: colr || ink }); };
+  const header = () => { C.forEach((c, i) => cell(c, i, c.t, y - 10, bold, 9, mute)); y -= 16; page.drawLine({ start: { x: MG, y }, end: { x: PW - MG, y }, thickness: .6, color: mute }); y -= 4; };
+  header();
+  const fmt = (u, k) => u[k] == null ? '-' : k === 'nccpi' ? u[k].toFixed(2) : Math.round(u[k]) + '';
+  for (const u of rows) {
+    const nm = wrap(u.muname, font, 9, C[1].w), sub = [u.drain ? u.drain.toLowerCase() : null, u.hydgrp ? 'group ' + u.hydgrp : null, u.hydric ? u.hydric + '% hydric' : null,
+      u.b811 ? `B811 #${u.b811.num}: base PI ${Math.round(u.pi / u.b811.f)} x ${u.b811.f.toFixed(2)} slope/erosion` : null].filter(Boolean).join('; ');
+    const subL = wrap(sub, font, 7.5, C[1].w), hgt = nm.length * 11 + subL.length * 9.5 + 8;
+    if (y - hgt < MG + 30) { page = doc.addPage([PW, PH]); y = PH - MG; header(); }
+    const top = y - 10;
+    const c0 = sw[g.soil.units.indexOf(u)]; if (c0) page.drawRectangle({ x: colX[0], y: top - 1, width: 8, height: 8, color: rgb(c0[0] / 255, c0[1] / 255, c0[2] / 255) });
+    page.drawText(san(u.musym || '-'), { x: colX[0] + (c0 ? 11 : 0), y: top, size: 9, font: bold, color: ink });
+    nm.forEach((l, j) => cell(C[1], 1, l, top - j * 11, font, 9));
+    subL.forEach((l, j) => cell(C[1], 1, l, top - nm.length * 11 - j * 9.5 + 1, font, 7.5, mute));
+    cell(C[2], 2, f1(u.acres), top, font, 9); cell(C[3], 3, Math.round(u.acres / g.fieldAc * 100) + '', top, font, 9);
+    cell(C[4], 4, fmt(u, 'pi'), top, bold, 9); cell(C[5], 5, fmt(u, 'corn'), top, font, 9); cell(C[6], 6, fmt(u, 'soy'), top, font, 9); cell(C[7], 7, fmt(u, 'nccpi'), top, font, 9);
+    y -= hgt; page.drawLine({ start: { x: MG, y: y + 3 }, end: { x: PW - MG, y: y + 3 }, thickness: .4, color: line });
+  }
+  if (y < MG + 60) { page = doc.addPage([PW, PH]); y = PH - MG; }
+  const tot = rows.reduce((t, u) => t + u.acres, 0), av = k => { const p = prodAvg(g, k); return p ? (k === 'nccpi' ? p.v.toFixed(2) : Math.round(p.v) + '') : '-'; };
+  y -= 4; const top = y - 10;
+  cell(C[1], 1, 'Weighted average / total', top, bold, 9); cell(C[2], 2, f1(tot), top, bold, 9); cell(C[3], 3, '100', top, bold, 9);
+  cell(C[4], 4, av('pi'), top, bold, 9); cell(C[5], 5, av('corn'), top, bold, 9); cell(C[6], 6, av('soy'), top, bold, 9); cell(C[7], 7, av('nccpi'), top, bold, 9);
+  y -= 30;
+  const notes = [
+    'Illinois PI, corn and soybeans: University of Illinois Bulletin 811 (Olson and Lang, 2000), Table S2 optimum-management ratings, matched by Illinois soil number and multiplied by the Table S3 factor for slope and erosion. The 2012 revision of Table S2 may differ by a point or two for some soils.',
+    'NCCPI: NRCS National Commodity Crop Productivity Index from the USDA soil survey (SSURGO), 0 to 1, weighted by component percent.',
+    'Soil lines and acres come from the USDA soil survey map, which is mapped at about 1:12,000 to 1:24,000, and are measured over the field outline as drawn. A surveyed or FSA acreage and a professional soil map can differ.'
+  ];
+  for (const n of notes) { for (const l of wrap('- ' + n, font, 8.5, PW - MG * 2)) { if (y < MG + 20) { page = doc.addPage([PW, PH]); y = PH - MG; } page.drawText(l, { x: MG, y: y - 9, size: 8.5, font, color: mute }); y -= 11; } y -= 3; }
+  const pages = doc.getPages();
+  pages.forEach((p, j) => p.drawText(san(`${name} - soils and productivity - page ${j + 1} of ${pages.length} - made with AcreFlow`), { x: MG, y: 20, size: 8, font, color: mute }));
+  return await doc.save();
+}
+
 /* ---------- KML ---------- */
 function buildKML(g, name, ov) {
   ov = ov || {};
@@ -884,6 +1049,6 @@ function buildKML(g, name, ov) {
 ${pm}</Document></kml>`;
 }
 
-global.FieldEngine = { b811For, PROD, prodAvg, prodLine, applySoils, rasterizeSoils, parseWktPolygons, drainRank, spacingFor, soilRows, analyzeGrid, retune, WW_LEVELS, LOW_LEVELS, DEFAULT_TUNE, checkWaterways, wwStatus, lowMethod, waterwayRuns, chaikin, cellLL: ll, drawPlan, buildPDF, buildKML,
+global.FieldEngine = { buildSoilPDF, drawSoilMap, b811For, PROD, prodAvg, prodLine, applySoils, rasterizeSoils, parseWktPolygons, drainRank, spacingFor, soilRows, analyzeGrid, retune, WW_LEVELS, LOW_LEVELS, DEFAULT_TUNE, checkWaterways, wwStatus, lowMethod, waterwayRuns, chaikin, cellLL: ll, drawPlan, buildPDF, buildKML,
   workItems, summaryLines, mainOn, noWork, rampColor, ELEV_RAMP, FT, ACRE, POND_M };
 })(window);

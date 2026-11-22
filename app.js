@@ -1,7 +1,7 @@
 /* AcreFlow app: map, field drawing, overlays, rain, dirt work plan, report export. */
 {
 'use strict';
-const VERSION = '15';
+const VERSION = '16';
 const $ = id => document.getElementById(id);
 const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
 const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
@@ -523,7 +523,9 @@ function buildSoilOverlay() {
   if (map.getSource('ov-soil')) map.getSource('ov-soil').updateImage({ url, coordinates: grid.coords });
   else { map.addSource('ov-soil', { type: 'image', url, coordinates: grid.coords }); map.addLayer({ id: 'ov-soil', type: 'raster', source: 'ov-soil', layout: { visibility: $('tSoil').checked ? 'visible' : 'none' }, paint: { 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, 'ov-elev'); }
 }
+function soilBtn() { $('soilPdf').disabled = !(grid && grid.soil && prodState === 'done'); }
 function showSoils() {
+  soilBtn();
   const on = $('tSoil').checked, box = $('soilList');
   box.classList.toggle('hide', !on);
   if (!on) return;
@@ -618,9 +620,10 @@ function refreshPlan() {
     else { map.addSource('ov-wet', { type: 'image', url, coordinates: g.coords }); map.addLayer({ id: 'ov-wet', type: 'raster', source: 'ov-wet', layout: { visibility: $('tPlan').checked ? 'visible' : 'none' }, paint: { 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, 'mask'); }
   }
   const items = E.workItems(g, ov), byId = Object.fromEntries(items.map(i => [i.id, i]));
-  const all = [...g.depressions.map(d => ({ id: d.label, type: 'low', o: d })), ...g.wet.map(p => ({ id: p.label, type: 'wet', o: p })),
-    ...g.waterways.filter(w => E.wwStatus(w, ov[w.label]) !== 'wooded' && ov[w.label] !== 'skip').map(w => ({ id: 'T' + w.label.slice(1), type: 'main', o: w })),
-    ...g.waterways.map(w => ({ id: w.label, type: 'ww', o: w }))];
+  const riskRank = w => ({ high: 0, moderate: 1, low: 2 }[w.risk] || 0);
+  const all = [...g.waterways.slice().sort((x, y) => riskRank(x) - riskRank(y)).map(w => ({ id: w.label, type: 'ww', o: w })),
+    ...g.depressions.map(d => ({ id: d.label, type: 'low', o: d })), ...g.wet.map(p => ({ id: p.label, type: 'wet', o: p })),
+    ...g.waterways.filter(w => w.root && E.wwStatus(w, ov[w.label]) !== 'wooded' && ov[w.label] !== 'skip').map(w => ({ id: 'T' + w.label.slice(1), type: 'main', o: w }))];
   const todo = items.filter(i => !i.existing).length;
   $('tabWork').textContent = todo ? `Dirt work (${todo})` : 'Dirt work';
   $('itemsHint').textContent = !all.length ? 'No low spots or flow paths big enough to need dirt work showed up at this data resolution.'
@@ -854,6 +857,22 @@ $('pdfBtn').onclick = async () => {
   try { const r = await makePDF(), ok = await deliver(r.blob, r.name); reportMsg(ok ? '' : 'Report ready.', !ok); }
   catch (e) { reportMsg('Could not build the report: ' + e.message); }
   btn.disabled = false;
+};
+$('soilPdf').onclick = async () => {
+  if (!grid || !grid.soil) return;
+  const btn = $('soilPdf'), msg = $('soilPdfMsg'); btn.disabled = true; msg.textContent = 'Building soil report…';
+  try {
+    if (!window.PDFLib) await loadScript('pdf-lib.min.js');
+    let logo = null; try { logo = new Uint8Array(await (await fetch('icon-192.png')).arrayBuffer()); } catch (e) {}
+    const center = [field.reduce((s, p) => s + p[0], 0) / field.length, field.reduce((s, p) => s + p[1], 0) / field.length];
+    const bytes = await E.buildSoilPDF(grid, { name: reportName(), logo, center, key: prodKey(), aerial: grid.img || null,
+      date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) });
+    const blob = new Blob([bytes], { type: 'application/pdf' }), fname = fileBase().replace(/-dirt-work$/, '') + '-soils.pdf';
+    const ok = await deliver(blob, fname);
+    msg.textContent = ok ? '' : 'Report ready.';
+    if (!ok) { const b = document.createElement('button'); b.className = 'btn on'; b.style.marginTop = '8px'; b.textContent = 'Open / share soil report'; b.onclick = () => deliver(blob, fname).then(() => { msg.textContent = ''; }); msg.appendChild(document.createElement('br')); msg.appendChild(b); }
+  } catch (e) { msg.textContent = 'Could not build the soil report: ' + e.message; }
+  btn.disabled = !(grid && grid.soil);
 };
 $('kmlBtn').onclick = async () => {
   if (!grid) return;

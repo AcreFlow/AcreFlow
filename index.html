@@ -97,7 +97,7 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
 .item select{width:100%;height:44px;border-radius:10px;border:1px solid var(--line);background:#232a24;padding:0 10px;font-size:16px}
 .soil{display:flex;gap:10px;align-items:flex-start;padding:5px 0;font-size:14px}.soil i{flex:none;width:16px;height:16px;border-radius:4px;margin-top:2px}.soil small{display:block;color:var(--mute);font-size:13px}
 .pick{width:100%;height:44px;border-radius:10px;border:1px solid var(--line);background:#232a24;padding:0 10px;font-size:16px;margin:4px 0 2px}
-.prod-avg{display:flex;gap:12px;align-items:center;background:rgba(255,255,255,.05);border-radius:10px;padding:8px 10px;margin:6px 0}.prod-avg b{font-size:24px;white-space:nowrap}.prod-avg span{color:var(--mute);font-size:13px;line-height:1.25}
+.prod-avg{display:flex;gap:12px;align-items:center;background:rgba(255,255,255,.05);border-radius:10px;padding:8px 12px;margin:6px 0}.prod-avg b{flex:none;font-size:26px;line-height:1;white-space:nowrap}.prod-avg span{flex:1;color:var(--mute);font-size:13px;line-height:1.3}
 .key{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--mute);margin-top:8px}
 .key i{display:inline-block;width:18px;height:4px;border-radius:2px;vertical-align:middle;margin-right:5px}
 .pp{font-size:13px;color:#14181a;line-height:1.35}.pp b{display:block;font-size:14px;margin-bottom:4px;padding-right:22px}.pp div{overflow-wrap:anywhere}.pp span{color:#5a6460}.pp .btn{margin-top:8px;width:100%;height:40px}
@@ -175,6 +175,8 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
             </div>
             <div class="tog"><label for="tSoil">Soil types<small>USDA soil survey, colored by drainage</small></label><input type="checkbox" class="sw" id="tSoil"></div>
             <div id="soilList" class="hide"></div>
+            <div class="row" style="margin:6px 0 4px"><button class="btn" id="soilPdf" type="button" disabled>Soil &amp; productivity report (PDF)</button></div>
+            <p class="hint" id="soilPdfMsg" style="font-size:13px;margin:0 0 6px"></p>
             <div class="tog"><label for="tElev">Elevation colors<small>Low to high across the field</small></label><input type="checkbox" class="sw" id="tElev"></div>
             <div id="legend" class="hide"><div class="legend" id="legBar"></div><div class="legend-l"><span id="legLo"></span><span id="legHi"></span></div></div>
             <div class="tog"><label for="tRoads">Roads &amp; labels</label><input type="checkbox" class="sw" id="tRoads" checked></div>
@@ -216,8 +218,8 @@ textarea.field-in{height:68px;padding:10px 12px;resize:none;margin-top:8px;displ
 </div>
 
 <script src="vendor/maplibre-gl.js"></script>
-<script src="b811.js?v=15"></script>
-<script src="engine.js?v=15"></script>
-<script src="app.js?v=15"></script>
+<script src="b811.js?v=16"></script>
+<script src="engine.js?v=16"></script>
+<script src="app.js?v=16"></script>
 </body>
 </html>
